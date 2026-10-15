@@ -15,3 +15,4 @@ flatpak/build-dir/
 .freebuff/
 flatpak/modules.yaml
 ref/
+.workbuddy-ai
