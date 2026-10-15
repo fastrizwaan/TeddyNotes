@@ -107,7 +107,13 @@ class NoteDatabase:
 
     @contextmanager
     def get_connection(self):
-        """Thread-safe context manager for persistent SQLite connection."""
+        """Thread-safe context manager for the shared SQLite connection.
+
+        On an exception propagating out of the caller's block any dangling
+        (uncommitted) transaction is rolled back, so a failed write cannot
+        leave the connection in a half-open state that a later unrelated
+        ``commit()`` would silently apply.
+        """
         with self._lock:
             if self._conn is None:
                 is_mem = str(self.db_path) == ":memory:"
@@ -125,7 +131,30 @@ class NoteDatabase:
                 conn.execute("PRAGMA busy_timeout = 5000")
                 self._conn = conn
 
-            yield self._conn
+            conn = self._conn
+            try:
+                yield conn
+            except BaseException:
+                if conn.in_transaction:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                raise
+
+    @contextmanager
+    def _write_transaction(self):
+        """Lock-guarded write transaction that commits on success and rolls back on error.
+
+        Unlike ``get_connection`` (which only guards access to the shared
+        connection), this commits exactly once on success. Any exception raised
+        part-way through the write is rolled back by ``get_connection`` and
+        re-raised, so the connection is never left holding a partially applied
+        transaction.
+        """
+        with self.get_connection() as conn:
+            yield conn
+            conn.commit()
 
     def close(self):
         """Cleanly close database connection and free resources."""
@@ -445,7 +474,7 @@ Enjoy writing with Teddy Notes!
     ) -> Note:
         """Save note with Markdown as the authoritative single source of truth."""
         now = time.time()
-        with self.get_connection() as conn:
+        with self._write_transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM notes WHERE id = ?", (note_id,))
             row = cursor.fetchone()
@@ -679,8 +708,10 @@ Enjoy writing with Teddy Notes!
                 created_at=row["created_at"] if row else now,
                 updated_at=now,
             )
-            self._notify_change("note-saved", {"note_id": note_id, "note": saved_note}, sender=sender)
-            return saved_note
+        # Dispatch the change notification only after the transaction has
+        # committed and the DB lock has been released.
+        self._notify_change("note-saved", {"note_id": note_id, "note": saved_note}, sender=sender)
+        return saved_note
 
     def get_next_untitled_title(self) -> str:
         """Generate the next unique untitled note title with a counter (e.g. Untitled Note 1, 2, 3)."""

@@ -30,6 +30,27 @@ _GLOBAL_DB = None
 _URI_SCHEME_REGISTERED = False
 
 
+def _db_for_request(request):
+    """Resolve the NoteDatabase that owns the WebView issuing `request`.
+
+    The ``attachment://`` scheme is registered once per process, so a single
+    module-global database is wrong as soon as a second window (with its own
+    NoteDatabase) is opened: the last editor created would win and images in
+    the first window would resolve against the wrong store. We instead look up
+    the database associated with the requesting WebView, falling back to the
+    most recently registered one.
+    """
+    try:
+        webview = request.get_web_view()
+    except Exception:
+        webview = None
+    if webview is not None:
+        db = getattr(webview, "_teddy_db", None)
+        if db is not None:
+            return db
+    return _GLOBAL_DB
+
+
 def _register_attachment_scheme(db):
     """Register custom attachment:// URI scheme with WebKit to serve images from SQLite BLOBs."""
     global _GLOBAL_DB, _URI_SCHEME_REGISTERED
@@ -48,10 +69,11 @@ def _register_attachment_scheme(db):
                 elif path.startswith("attachment:"):
                     path = path[len("attachment:"):]
                 att_id = path.split("/")[0].split("?")[0].split("#")[0]
-                if _GLOBAL_DB:
-                    att = _GLOBAL_DB.get_attachment(att_id)
+                owner_db = _db_for_request(request)
+                if owner_db:
+                    att = owner_db.get_attachment(att_id)
                     if not att and "." in att_id:
-                        att = _GLOBAL_DB.get_attachment(att_id.rsplit(".", 1)[0])
+                        att = owner_db.get_attachment(att_id.rsplit(".", 1)[0])
 
                     if att and att.get("data"):
                         data = att["data"]
@@ -473,6 +495,14 @@ class NoteEditor(Gtk.Box):
         self.webview.set_hexpand(True)
         self.webview.set_vexpand(True)
         self.webview.set_focusable(True)
+
+        # Associate this WebView with its owning database so the shared
+        # ``attachment://`` URI handler resolves images against the correct
+        # store in multi-window sessions.
+        try:
+            self.webview._teddy_db = self.db
+        except Exception:
+            pass
 
         bg_rgba = Gdk.RGBA()
         bg_rgba.parse("#24252A" if self.is_dark_mode else "#FFFFFF")
@@ -1769,15 +1799,21 @@ class NoteEditor(Gtk.Box):
             self._save_timeout_id = None
             if not self._pending_save_data:
                 return False
+            # Snapshot the payload on the main thread. The worker thread must not
+            # touch any live widget/`current_note` state afterwards: everything it
+            # needs is copied into this immutable dict.
             data = dict(self._pending_save_data)
+            data["tags"] = list(data.get("tags") or [])
 
             def worker():
                 try:
                     md_content = html_to_markdown(data["html"])
-                    note_tags = data.get("tags")
-                    note_category = data.get("category", self.current_note.category if self.current_note else None)
+                    note_category = data.get("category")
                     if note_category and note_category.lower() == "uncategorized":
                         note_category = ""
+                    # `db.save_note` is internally lock-guarded and marshals its
+                    # change notification back to the main loop via GLib.idle_add,
+                    # so it is safe to call from this worker thread.
                     self.db.save_note(
                         note_id=data["note_id"],
                         title=data["title"],
@@ -1785,28 +1821,54 @@ class NoteEditor(Gtk.Box):
                         content_html=data["html"],
                         content_markdown=md_content,
                         category=note_category,
-                        tags=note_tags,
+                        tags=data.get("tags"),
                         has_todo=data["has_todo"],
                         sender=self
                     )
+
                     def on_done():
+                        # The user may have switched notes (or another save landed)
+                        # while this worker was running. Only touch UI state when the
+                        # exact payload we saved is still the pending one.
+                        if not self._is_current_pending(data):
+                            return False
                         if self.current_note and self.current_note.id == data["note_id"]:
                             self.current_note.content_markdown = md_content
-                        if self._pending_save_data and self._pending_save_data.get("html") == data["html"]:
-                            self._pending_save_data = None
-                            self.hide_conflict_banner()
-                            self.status_label.set_text("Saved")
-                            self.emit("note-updated", data["note_id"], data["title"], data["excerpt"], data["html"], md_content, data.get("tags", []), data["has_todo"])
+                            self.current_note.content_html = data["html"]
+                            self.current_note.title = data["title"]
+                            self.current_note.excerpt = data["excerpt"]
+                        self._pending_save_data = None
+                        self.hide_conflict_banner()
+                        self.status_label.set_text("Saved")
+                        self.emit("note-updated", data["note_id"], data["title"], data["excerpt"], data["html"], md_content, data.get("tags", []), data["has_todo"])
                         return False
 
                     GLib.idle_add(on_done)
                 except Exception as e:
                     print("Background save error:", e)
+                    # Surface the failure instead of silently leaving "Saving…".
+                    GLib.idle_add(self._on_background_save_failed, data["note_id"])
 
             threading.Thread(target=worker, daemon=True).start()
             return False
 
         self._save_timeout_id = GLib.timeout_add(250, do_save)
+
+    def _is_current_pending(self, data: dict) -> bool:
+        """True when `data` is still the exact payload awaiting persistence."""
+        pending = self._pending_save_data
+        if not pending:
+            return False
+        return (
+            pending.get("note_id") == data.get("note_id")
+            and pending.get("html") == data.get("html")
+        )
+
+    def _on_background_save_failed(self, note_id: str) -> bool:
+        """Main-thread handler for a failed background save (never clobbers a newer pending save)."""
+        if self._pending_save_data and self._pending_save_data.get("note_id") == note_id:
+            self.status_label.set_text("Save failed")
+        return False
 
     def insert_tag(self, tag_name: str):
         """Insert a tag pill into the editor at cursor position."""
@@ -1822,33 +1884,37 @@ class NoteEditor(Gtk.Box):
             GLib.source_remove(self._save_timeout_id)
             self._save_timeout_id = None
 
-        if self._pending_save_data:
-            data = self._pending_save_data
-            self._pending_save_data = None
-            try:
-                md = html_to_markdown(data["html"])
-                note_category = data.get("category", self.current_note.category if self.current_note else None)
-                if note_category and note_category.lower() == "uncategorized":
-                    note_category = ""
-                note_tags = data.get("tags")
-                self.db.save_note(
-                    note_id=data["note_id"],
-                    title=data["title"],
-                    excerpt=data["excerpt"],
-                    content_html=data["html"],
-                    content_markdown=md,
-                    category=note_category,
-                    tags=note_tags,
-                    has_todo=data["has_todo"],
-                    sender=self
-                )
-                if self.current_note and self.current_note.id == data["note_id"]:
-                    self.current_note.content_markdown = md
-                self.hide_conflict_banner()
-                self.status_label.set_text("Saved")
-                self.emit("note-updated", data["note_id"], data["title"], data["excerpt"], data["html"], md, data.get("tags", []), data["has_todo"])
-            except Exception as e:
-                print("Flush save error:", e)
+        data = self._pending_save_data
+        if not data:
+            return
+        try:
+            md = html_to_markdown(data["html"])
+            note_category = data.get("category")
+            if note_category and note_category.lower() == "uncategorized":
+                note_category = ""
+            self.db.save_note(
+                note_id=data["note_id"],
+                title=data["title"],
+                excerpt=data["excerpt"],
+                content_html=data["html"],
+                content_markdown=md,
+                category=note_category,
+                tags=data.get("tags"),
+                has_todo=data["has_todo"],
+                sender=self
+            )
+            # Clear the pending payload only after a successful commit, so a
+            # failure keeps the data available for a retry instead of dropping it.
+            if self._is_current_pending(data):
+                self._pending_save_data = None
+            if self.current_note and self.current_note.id == data["note_id"]:
+                self.current_note.content_markdown = md
+            self.hide_conflict_banner()
+            self.status_label.set_text("Saved")
+            self.emit("note-updated", data["note_id"], data["title"], data["excerpt"], data["html"], md, data.get("tags", []), data["has_todo"])
+        except Exception as e:
+            print("Flush save error:", e)
+            self.status_label.set_text("Save failed")
 
     def destroy_editor(self):
         """Clean up timers, pending saves, and WebKit handlers to avoid memory leaks."""

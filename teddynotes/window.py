@@ -28,6 +28,7 @@ class TeddyWindow(Adw.ApplicationWindow):
         self._pending_sidebar_width = None
         self._sidebar_resize_idle_id = None
         self._note_history: List[str] = []
+        self._cleaned_up = False
 
         self.set_title("Teddy Notes")
         self.set_icon_name(APP_ID)
@@ -321,7 +322,14 @@ class TeddyWindow(Adw.ApplicationWindow):
         self.config_manager.set_last_opened_note_id("")
 
     def _cleanup(self):
-        """Release timers, DB listeners, and child resources cleanly."""
+        """Release timers, DB listeners, and child resources cleanly.
+
+        Idempotent: both ``close-request`` and ``destroy`` call this, and the
+        second invocation must not double-free timers/handlers.
+        """
+        if getattr(self, "_cleaned_up", False):
+            return
+        self._cleaned_up = True
         self._flush_pending_sidebar_resize()
         if hasattr(self, "db") and self.db:
             try:
@@ -362,10 +370,7 @@ class TeddyWindow(Adw.ApplicationWindow):
 
         visible_page = self.navigation.get_visible_page()
         if visible_page != self.editor_page:
-            if immediate:
-                self.navigation.push_by_tag("editor") if False else self.navigation.push(self.editor_page)
-            else:
-                self.navigation.push(self.editor_page)
+            self.navigation.push(self.editor_page)
 
         if self.config_manager.get_editor_mode() == "distraction_free":
             self.split_view.set_show_sidebar(False)
