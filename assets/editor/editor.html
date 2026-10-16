@@ -12,7 +12,7 @@
       --quote-font-size: 16pt;
       --font-stack: -apple-system, BlinkMacSystemFont, "Cantarell", "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       --font-mono: "JetBrains Mono", "Fira Code", "Source Code Pro", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      --transition-speed: 0.2s;
+      --transition-speed: 0s;
     }
 
     /* Light Theme (Adwaita Light) */
@@ -120,6 +120,10 @@
       box-sizing: border-box;
     }
 
+    html, body {
+      height: 100%;
+    }
+
     body {
       margin: 0;
       padding: 0;
@@ -129,20 +133,21 @@
       font-size: var(--base-font-size, 16pt);
       line-height: 1.65;
       -webkit-font-smoothing: antialiased;
-      transition: background-color var(--transition-speed), color var(--transition-speed);
       overflow-x: hidden;
+      overflow-x: clip;
     }
 
     #editor-container {
       max-width: 760px;
       margin: 0 auto;
       padding: 36px 32px 140px 32px;
-      min-height: 100vh;
+      min-height: 100%;
     }
 
     #editor {
       outline: none;
       min-height: 70vh;
+      overflow-wrap: break-word;
       word-break: break-word;
       caret-color: var(--text-color);
     }
@@ -188,7 +193,7 @@
       margin-bottom: 0.15em;
     }
 
-    p, div {
+    #editor p, #editor div {
       margin-top: 0.25em;
       margin-bottom: 0.25em;
     }
@@ -216,7 +221,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.15s ease;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
     }
 
     .stilo-checkbox:hover {
@@ -406,7 +411,6 @@
       max-width: 100%;
       width: fit-content;
       box-sizing: border-box;
-      transition: outline 0.15s ease;
     }
 
     .stilo-table-wrapper.table-active {
@@ -445,7 +449,6 @@
       position: relative;
       line-height: 0;
       box-sizing: border-box;
-      transition: outline 0.15s ease;
     }
 
     .stilo-img-wrapper.img-active {
@@ -458,7 +461,6 @@
       width: 100%;
       height: auto;
       border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
       display: block;
       user-select: none;
       -webkit-user-select: none;
@@ -702,8 +704,54 @@
     let lastSavedTitle = '';
 
     let lastActiveTable = null;
+    let lastActiveTableWrap = null;
     let lastActiveCell = null;
     let lastActiveImage = null;
+    let selectionRaf = 0;
+
+    function clearTableActive() {
+      if (lastActiveTableWrap) {
+        lastActiveTableWrap.classList.remove('table-active');
+        lastActiveTableWrap = null;
+      }
+      lastActiveTable = null;
+    }
+
+    function clearImageActive() {
+      if (lastActiveImage) {
+        lastActiveImage.classList.remove('img-active');
+        lastActiveImage = null;
+      }
+    }
+
+    function setTableActive(table) {
+      if (!table) return;
+      lastActiveTable = table;
+      const wrap = table.closest('.stilo-table-wrapper') || table;
+      if (lastActiveTableWrap && lastActiveTableWrap !== wrap) {
+        lastActiveTableWrap.classList.remove('table-active');
+      }
+      lastActiveTableWrap = wrap;
+      wrap.classList.add('table-active');
+      if (lastActiveImage) {
+        lastActiveImage.classList.remove('img-active');
+        lastActiveImage = null;
+      }
+    }
+
+    function setImageActive(imgWrapper) {
+      if (!imgWrapper) return;
+      if (lastActiveImage && lastActiveImage !== imgWrapper) {
+        lastActiveImage.classList.remove('img-active');
+      }
+      lastActiveImage = imgWrapper;
+      imgWrapper.classList.add('img-active');
+      if (lastActiveTableWrap) {
+        lastActiveTableWrap.classList.remove('table-active');
+        lastActiveTableWrap = null;
+        lastActiveTable = null;
+      }
+    }
 
     let isResizingTable = false;
     let resizingTableEl = null;
@@ -871,7 +919,30 @@
       return range;
     }
 
-    document.addEventListener('selectionchange', saveCurrentRange);
+    document.addEventListener('selectionchange', () => {
+      saveCurrentRange();
+      if (selectionRaf) return;
+      selectionRaf = requestAnimationFrame(() => {
+        selectionRaf = 0;
+        const sel = window.getSelection();
+        if (!sel || !sel.rangeCount) return;
+        let node = sel.getRangeAt(0).commonAncestorContainer;
+        if (node.nodeType === 3) node = node.parentNode;
+        if (!node || !node.closest) return;
+        const table = node.closest('table.stilo-table');
+        const cell = node.closest('td, th');
+        const imgWrapper = node.closest('.stilo-img-wrapper');
+        if (table) {
+          setTableActive(table);
+        }
+        if (cell) {
+          lastActiveCell = cell;
+        }
+        if (imgWrapper) {
+          setImageActive(imgWrapper);
+        }
+      });
+    });
 
     // ==========================================
     // Undo / Redo Stack Management
@@ -1407,7 +1478,9 @@
         onKeyDown(e);
       });
       editor.addEventListener('keyup', (e) => {
-        updateActiveElement(e);
+        if (e.target && (e.target.closest('table.stilo-table') || e.target.closest('.stilo-img-wrapper'))) {
+          updateActiveElement(e);
+        }
       });
       document.addEventListener('click', (e) => {
         if (!e.target.closest('#stilo-autocomplete-popover')) {
@@ -1471,35 +1544,6 @@
       });
 
 
-      document.addEventListener('selectionchange', () => {
-        const sel = window.getSelection();
-        if (sel && sel.rangeCount) {
-          let node = sel.getRangeAt(0).commonAncestorContainer;
-          if (node.nodeType === 3) node = node.parentNode;
-          const table = node ? node.closest('table.stilo-table') : null;
-          const cell = node ? node.closest('td, th') : null;
-          const imgWrapper = node ? node.closest('.stilo-img-wrapper') : null;
-          if (table) {
-            lastActiveTable = table;
-            const wrap = table.closest('.stilo-table-wrapper') || table;
-            document.querySelectorAll('.stilo-table-wrapper, table.stilo-table').forEach(t => {
-              if (t !== wrap && t !== table) t.classList.remove('table-active');
-            });
-            wrap.classList.add('table-active');
-          }
-          if (cell) {
-            lastActiveCell = cell;
-          }
-          if (imgWrapper) {
-            lastActiveImage = imgWrapper;
-            document.querySelectorAll('.stilo-img-wrapper').forEach(w => {
-              if (w !== imgWrapper) w.classList.remove('img-active');
-            });
-            imgWrapper.classList.add('img-active');
-          }
-        }
-      });
-
       window.addEventListener('blur', () => {
         clearTimeout(saveTimeout);
         notifyChange();
@@ -1517,9 +1561,7 @@
           e.stopPropagation();
           const wrap = imgH.closest('.stilo-img-wrapper');
           if (!wrap) return;
-          wrap.classList.add('img-active');
-          lastActiveImage = wrap;
-          document.querySelectorAll('.stilo-table-wrapper, table.stilo-table').forEach(t => t.classList.remove('table-active'));
+          setImageActive(wrap);
           isResizingImg = true;
           resizingImgEl = wrap;
           imgStartX = e.clientX;
@@ -1539,9 +1581,8 @@
           e.stopPropagation();
           const wrap = tblH.closest('.stilo-table-wrapper');
           if (!wrap) return;
-          wrap.classList.add('table-active');
           lastActiveTable = wrap.querySelector('table');
-          document.querySelectorAll('.stilo-img-wrapper').forEach(w => w.classList.remove('img-active'));
+          setTableActive(lastActiveTable || wrap);
           isResizingTable = true;
           resizingTableEl = wrap;
           tableStartX = e.clientX;
@@ -1629,8 +1670,8 @@
 
       const onOutsideClick = (e) => {
         if (!e.target.closest('#floating-toolbar') && !e.target.closest('.stilo-table-wrapper') && !e.target.closest('.stilo-img-wrapper')) {
-          document.querySelectorAll('.stilo-table-wrapper, table.stilo-table').forEach(t => t.classList.remove('table-active'));
-          document.querySelectorAll('.stilo-img-wrapper').forEach(w => w.classList.remove('img-active'));
+          clearTableActive();
+          clearImageActive();
         }
       };
       document.addEventListener('click', onOutsideClick);
@@ -1740,32 +1781,19 @@
 
     function updateActiveElement(e) {
       const target = e.target;
-      if (!target) return;
+      if (!target || !target.closest) return;
       const table = target.closest('table.stilo-table');
       const cell = target.closest('td, th');
       const imgWrapper = target.closest('.stilo-img-wrapper');
 
       if (table) {
-        lastActiveTable = table;
-        const wrap = table.closest('.stilo-table-wrapper') || table;
-        document.querySelectorAll('.stilo-table-wrapper, table.stilo-table').forEach(t => {
-          if (t !== wrap && t !== table) t.classList.remove('table-active');
-        });
-        document.querySelectorAll('.stilo-img-wrapper').forEach(w => w.classList.remove('img-active'));
-        wrap.classList.add('table-active');
-        initTableHandles(table);
+        setTableActive(table);
       }
       if (cell) {
         lastActiveCell = cell;
       }
       if (imgWrapper) {
-        lastActiveImage = imgWrapper;
-        document.querySelectorAll('.stilo-img-wrapper').forEach(w => {
-          if (w !== imgWrapper) w.classList.remove('img-active');
-        });
-        document.querySelectorAll('.stilo-table-wrapper, table.stilo-table').forEach(t => t.classList.remove('table-active'));
-        imgWrapper.classList.add('img-active');
-        initImageHandles(imgWrapper);
+        setImageActive(imgWrapper);
       }
     }
 
@@ -2943,8 +2971,10 @@
       if (isUpdatingFromPython || isUndoRedoAction || isConvertingMarkdown) return;
 
       const currentBlock = getClosestBlockElement() || editor;
-      flattenNestedBadges(currentBlock);
-      syncAndCleanTags(currentBlock);
+      if (currentBlock.querySelector && currentBlock.querySelector('.stilo-tag, .stilo-mention, .stilo-category-badge')) {
+        flattenNestedBadges(currentBlock);
+        syncAndCleanTags(currentBlock);
+      }
 
       clearTimeout(markdownConvertTimer);
       markdownConvertTimer = setTimeout(() => {
@@ -4620,15 +4650,29 @@
     // Python WebKit Bridge & Data Extraction
     // ==========================================
 
+    function getPlainLines(maxLines) {
+      const text = (editor.textContent || '').replace(/\u200B/g, '');
+      const lines = [];
+      for (const line of text.split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        lines.push(t);
+        if (lines.length >= maxLines) break;
+      }
+      return lines;
+    }
+
     function getTitle() {
       const h1 = editor.querySelector('h1');
-      if (h1 && h1.innerText.replace(/\u200B/g, '').trim()) return h1.innerText.replace(/\u200B/g, '').trim();
-      const firstLine = editor.innerText.replace(/\u200B/g, '').split('\n').map(l => l.trim()).find(l => l.length > 0);
-      return firstLine || 'Untitled Note';
+      if (h1) {
+        const t = (h1.textContent || '').replace(/\u200B/g, '').trim();
+        if (t) return t;
+      }
+      return getPlainLines(1)[0] || 'Untitled Note';
     }
 
     function getExcerpt() {
-      const lines = editor.innerText.replace(/\u200B/g, '').split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      const lines = getPlainLines(3);
       if (lines.length > 1) {
         return lines.slice(1, 3).join(' ');
       } else if (lines.length === 1) {
@@ -4678,6 +4722,10 @@
     }
 
     function getCleanHtml() {
+      const needsSanitize = editor.querySelector('.table-handle, .image-handle, .col-resize-handle, .table-active, .img-active, .stilo-table-wrapper');
+      if (!needsSanitize) {
+        return editor.innerHTML.replace(/\u200B/g, '');
+      }
       const clone = editor.cloneNode(true);
       clone.querySelectorAll('.table-handle, .image-handle, .col-resize-handle').forEach(h => h.remove());
       clone.querySelectorAll('.table-active, .img-active').forEach(el => {
@@ -4695,8 +4743,10 @@
           wrapper.remove();
         }
       });
-      flattenNestedBadges(clone);
-      syncAndCleanTags(clone);
+      if (clone.querySelector('.stilo-tag, .stilo-mention, .stilo-category-badge')) {
+        flattenNestedBadges(clone);
+        syncAndCleanTags(clone);
+      }
       return clone.innerHTML.replace(/\u200B/g, '');
     }
 

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import json
+import os
 import re
 import base64
 import mimetypes
@@ -509,11 +510,18 @@ class NoteEditor(Gtk.Box):
         self.webview.set_background_color(bg_rgba)
 
         settings = self.webview.get_settings()
+        debug = bool(os.environ.get("TEDDYNOTES_DEBUG"))
         try:
             settings.set_enable_javascript(True)
-            settings.set_enable_developer_extras(True)
+            settings.set_enable_developer_extras(debug)
             if hasattr(settings, "set_enable_write_console_messages_to_stdout"):
-                settings.set_enable_write_console_messages_to_stdout(True)
+                settings.set_enable_write_console_messages_to_stdout(debug)
+            if hasattr(settings, "set_enable_smooth_scrolling"):
+                settings.set_enable_smooth_scrolling(True)
+            if hasattr(WebKit, "HardwareAccelerationPolicy") and hasattr(settings, "set_hardware_acceleration_policy"):
+                settings.set_hardware_acceleration_policy(WebKit.HardwareAccelerationPolicy.ALWAYS)
+            if hasattr(settings, "set_enable_page_cache"):
+                settings.set_enable_page_cache(False)
         except Exception:
             pass
 
@@ -644,6 +652,8 @@ class NoteEditor(Gtk.Box):
         self._show_toolbar()
 
     def _on_toolbar_motion(self, _ctrl, _x, _y):
+        if self._mouse_over_toolbar:
+            return
         self._mouse_over_toolbar = True
         self._show_toolbar()
 
@@ -656,7 +666,10 @@ class NoteEditor(Gtk.Box):
         if self._is_toolbar_pinned:
             return
         h = self.webview.get_height()
-        if h > 0 and y >= h - 120:
+        near = h > 0 and y >= h - 120
+        if near == self._mouse_near_bottom:
+            return
+        if near:
             self._mouse_near_bottom = True
             self._show_toolbar()
         else:
@@ -1092,8 +1105,11 @@ class NoteEditor(Gtk.Box):
 
     def update_typography(self):
         scale = self.config_manager.get_editor_zoom_level()
+        # Keep WebView zoom at 1.0 and scale type in CSS. Fractional WebKitGTK
+        # zoom_level combined with larger font sizes double-scales and falls
+        # off the fast compositor path, which makes scrolling feel sticky.
         if hasattr(self.webview, "set_zoom_level"):
-            self.webview.set_zoom_level(scale)
+            self.webview.set_zoom_level(1.0)
 
         base_font_pt = round(16 * scale)
         code_font_px = round(14 * scale)
@@ -1302,8 +1318,6 @@ class NoteEditor(Gtk.Box):
         In read-only mode, filter out editing operations and provide relevant
         read-only actions (Select All, Copy).
         """
-        import os
-
         # Browser navigation actions that should never appear in a note editor
         disallowed_actions = {
             WebKit.ContextMenuAction.RELOAD,
