@@ -372,6 +372,7 @@ class NoteEditor(Gtk.Box):
         self._page_loaded = False
         self._pending_load_note = None
         self._save_timeout_id = None
+        self._save_in_flight = False
         self._current_printer = None
         self.is_read_only = False
         self.page_setup = self.config_manager.get_page_setup() if hasattr(self.config_manager, "get_page_setup") else create_default_page_setup()
@@ -1178,7 +1179,8 @@ class NoteEditor(Gtk.Box):
             self.current_note.tags = tags
             self.current_note.has_todo = has_todo
 
-            self.update_stats_popover()
+            if self.stats_popover.get_visible():
+                self.update_stats_popover()
 
             curr_cat = (self.current_note.category or "").strip()
             if curr_cat.lower() == "uncategorized":
@@ -1813,11 +1815,17 @@ class NoteEditor(Gtk.Box):
             self._save_timeout_id = None
             if not self._pending_save_data:
                 return False
+            if self._save_in_flight:
+                # Never run two saves concurrently; retry once the current one ends.
+                self._save_timeout_id = GLib.timeout_add(200, do_save)
+                return False
             # Snapshot the payload on the main thread. The worker thread must not
             # touch any live widget/`current_note` state afterwards: everything it
             # needs is copied into this immutable dict.
             data = dict(self._pending_save_data)
             data["tags"] = list(data.get("tags") or [])
+
+            self._save_in_flight = True
 
             def worker():
                 try:
@@ -1862,11 +1870,13 @@ class NoteEditor(Gtk.Box):
                     print("Background save error:", e)
                     # Surface the failure instead of silently leaving "Saving…".
                     GLib.idle_add(self._on_background_save_failed, data["note_id"])
+                finally:
+                    GLib.idle_add(self._clear_save_in_flight)
 
             threading.Thread(target=worker, daemon=True).start()
             return False
 
-        self._save_timeout_id = GLib.timeout_add(250, do_save)
+        self._save_timeout_id = GLib.timeout_add(800, do_save)
 
     def _is_current_pending(self, data: dict) -> bool:
         """True when `data` is still the exact payload awaiting persistence."""
@@ -1877,6 +1887,10 @@ class NoteEditor(Gtk.Box):
             pending.get("note_id") == data.get("note_id")
             and pending.get("html") == data.get("html")
         )
+
+    def _clear_save_in_flight(self) -> bool:
+        self._save_in_flight = False
+        return False
 
     def _on_background_save_failed(self, note_id: str) -> bool:
         """Main-thread handler for a failed background save (never clobbers a newer pending save)."""

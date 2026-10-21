@@ -464,12 +464,21 @@ class TeddyWindow(Adw.ApplicationWindow):
         return full_note
 
     def _on_note_updated(self, _ed, note_id: str, title: str, excerpt: str, html: str, md: str, tags: list, has_todo: bool):
+        # Saves fire while typing; rebuilding the sidebar and re-querying the
+        # DB on every one blocks the UI thread, so coalesce into one refresh.
+        if getattr(self, "_note_updated_timeout", None):
+            GLib.source_remove(self._note_updated_timeout)
+        self._note_updated_timeout = GLib.timeout_add(2000, self._run_note_updated_refresh)
+
+    def _run_note_updated_refresh(self) -> bool:
+        self._note_updated_timeout = None
         if hasattr(self, "sidebar"):
             self.sidebar.refresh()
         if hasattr(self, "editor"):
             self.editor._sync_autocomplete_data()
         if self.navigation.get_visible_page() != self.editor_page:
             self.index_view.refresh(update_sidebar=False)
+        return False
 
     def _on_editor_note_deleted(self, _ed, note_id: str):
         self.db.delete_note(note_id, sender=self)

@@ -550,6 +550,8 @@ class TestSidebarSectionHeadersAndAlignment(unittest.TestCase):
         # Simulate note updated from editor
         win.db.save_note(note.id, tags=["task", "my_apps"])
         win._on_note_updated(win.editor, note.id, "Task Note", "", "", "", ["task", "my_apps"], False)
+        if getattr(win, "_run_note_updated_refresh", None):
+            win._run_note_updated_refresh()
 
         self.assertIn("my_apps", win.sidebar._tag_rows)
         win.destroy()

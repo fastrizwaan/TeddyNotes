@@ -920,10 +920,10 @@
     }
 
     document.addEventListener('selectionchange', () => {
-      saveCurrentRange();
       if (selectionRaf) return;
       selectionRaf = requestAnimationFrame(() => {
         selectionRaf = 0;
+        saveCurrentRange();
         const sel = window.getSelection();
         if (!sel || !sel.rangeCount) return;
         let node = sel.getRangeAt(0).commonAncestorContainer;
@@ -1153,7 +1153,7 @@
 
       const text = node.textContent;
       const offset = range.startOffset;
-      const textBefore = text.slice(0, offset);
+      const textBefore = text.slice(Math.max(0, offset - 200), offset);
 
       const wikiMatch = textBefore.match(/(?:^|\s)\[\[([^\]\n]*)$/);
       const catHashMatch = textBefore.match(/(?<!#)##([a-zA-Z0-9_\-/]*)$/);
@@ -4650,8 +4650,12 @@
     // Python WebKit Bridge & Data Extraction
     // ==========================================
 
-    function getPlainLines(maxLines) {
-      const text = (editor.textContent || '').replace(/\u200B/g, '');
+    function getEditorText() {
+      return (editor.textContent || '').replace(/\u200B/g, '');
+    }
+
+    function getPlainLines(maxLines, fullText) {
+      const text = (fullText !== undefined ? fullText : getEditorText()).slice(0, 4000);
       const lines = [];
       for (const line of text.split('\n')) {
         const t = line.trim();
@@ -4662,17 +4666,17 @@
       return lines;
     }
 
-    function getTitle() {
+    function getTitle(fullText) {
       const h1 = editor.querySelector('h1');
       if (h1) {
         const t = (h1.textContent || '').replace(/\u200B/g, '').trim();
         if (t) return t;
       }
-      return getPlainLines(1)[0] || 'Untitled Note';
+      return getPlainLines(1, fullText)[0] || 'Untitled Note';
     }
 
-    function getExcerpt() {
-      const lines = getPlainLines(3);
+    function getExcerpt(fullText) {
+      const lines = getPlainLines(3, fullText);
       if (lines.length > 1) {
         return lines.slice(1, 3).join(' ');
       } else if (lines.length === 1) {
@@ -4681,14 +4685,14 @@
       return '';
     }
 
-    function getTags() {
+    function getTags(fullText) {
       const tagEls = editor.querySelectorAll('.stilo-tag');
       const tags = new Set();
       tagEls.forEach(el => {
         const t = el.getAttribute('data-tag');
         if (t) tags.add(t.toLowerCase());
       });
-      const text = (editor.textContent || '').replace(/\u200B/g, '');
+      const text = fullText !== undefined ? fullText : getEditorText();
       const rawMatches = text.match(/(?:^|[\s.,;:!?])#([a-zA-Z0-9_\-]+)(?=$|[\s.,;:!?])/g);
       if (rawMatches) {
         rawMatches.forEach(m => {
@@ -4699,8 +4703,8 @@
       return Array.from(tags);
     }
 
-    function getStats() {
-      const text = (editor.textContent || '').replace(/\u200B/g, '');
+    function getStats(fullText) {
+      const text = fullText !== undefined ? fullText : getEditorText();
       const words = (text.match(/\S+/g) || []).length;
       const chars = text.length;
       const paragraphs = text.split(/\n+/).filter(p => p.trim().length > 0).length;
@@ -4752,7 +4756,7 @@
 
     function notifyChangeDebounced() {
       clearTimeout(saveTimeout);
-      saveTimeout = setTimeout(notifyChange, 300);
+      saveTimeout = setTimeout(notifyChange, 500);
     }
 
     let isReadOnlyMode = false;
@@ -4781,7 +4785,8 @@
     function notifyChange() {
       if (isUpdatingFromPython || isReadOnlyMode) return;
       const currentHtml = getCleanHtml();
-      const currentTitle = getTitle();
+      const allText = getEditorText();
+      const currentTitle = getTitle(allText);
       if (currentHtml === lastSavedHtml && currentTitle === lastSavedTitle) {
         return;
       }
@@ -4791,10 +4796,10 @@
       if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.contentChanged) {
         const payload = {
           title: currentTitle,
-          excerpt: getExcerpt(),
+          excerpt: getExcerpt(allText),
           html: currentHtml,
-          tags: getTags(),
-          stats: getStats(),
+          tags: getTags(allText),
+          stats: getStats(allText),
           has_todo: hasTodo()
         };
         window.webkit.messageHandlers.contentChanged.postMessage(JSON.stringify(payload));

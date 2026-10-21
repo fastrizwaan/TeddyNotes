@@ -285,6 +285,49 @@ class TestThemeAndFont(unittest.TestCase):
         self.assertIn('--link-color: #78AEED;', html_dark)
         self.assertIn('--link-hover: #99C1F1;', html_dark)
 
+    def test_theme_selector_toggles_and_callbacks(self):
+        from gi.repository import Gdk, Gtk
+        if Gdk.Display.get_default() is None:
+            raise unittest.SkipTest("No Gdk.Display available (headless)")
+
+        from teddynotes.theme_selector import ThemeSelector
+        theme_changes = []
+        selector = ThemeSelector(self.config, on_theme_changed=lambda is_dark: theme_changes.append(is_dark))
+
+        self.assertIsInstance(selector._follow, Gtk.ToggleButton)
+        self.assertIsInstance(selector._light, Gtk.ToggleButton)
+        self.assertIsInstance(selector._dark, Gtk.ToggleButton)
+
+        # Initial state follows system
+        self.assertTrue(selector._follow.get_active())
+        self.assertFalse(selector._light.get_active())
+        self.assertFalse(selector._dark.get_active())
+
+        # Select dark
+        selector._dark.set_active(True)
+        self.assertEqual(self.config.get_theme_mode(), "dark")
+        self.assertTrue(selector._dark.get_active())
+        self.assertFalse(selector._follow.get_active())
+        self.assertIn(True, theme_changes)
+
+        # Select light
+        selector._light.set_active(True)
+        self.assertEqual(self.config.get_theme_mode(), "light")
+        self.assertTrue(selector._light.get_active())
+        self.assertFalse(selector._dark.get_active())
+        self.assertIn(False, theme_changes)
+
+        # Select follow
+        selector._follow.set_active(True)
+        self.assertEqual(self.config.get_theme_mode(), "follow")
+        self.assertTrue(selector._follow.get_active())
+
+        # Test external config change and populate()
+        self.config.set_theme_mode("dark")
+        selector.populate()
+        self.assertTrue(selector._dark.get_active())
+
 
 if __name__ == "__main__":
     unittest.main()
+
