@@ -167,7 +167,7 @@
     }
 
     h1 {
-      font-size: calc(2.15rem * var(--heading-scale, 1.0));
+      font-size: calc(1.6125em * var(--heading-scale, 1.0));
       letter-spacing: -0.02em;
       margin-top: 0;
       border-bottom: 1px solid var(--border-color);
@@ -175,20 +175,20 @@
     }
 
     h2 {
-      font-size: calc(1.65rem * var(--heading-scale, 1.0));
+      font-size: calc(1.2375em * var(--heading-scale, 1.0));
       letter-spacing: -0.015em;
       margin-top: 0.35em;
       margin-bottom: 0.2em;
     }
 
     h3 {
-      font-size: calc(1.32rem * var(--heading-scale, 1.0));
+      font-size: calc(0.99em * var(--heading-scale, 1.0));
       margin-top: 0.3em;
       margin-bottom: 0.2em;
     }
 
     h4 {
-      font-size: calc(1.12rem * var(--heading-scale, 1.0));
+      font-size: calc(0.84em * var(--heading-scale, 1.0));
       margin-top: 0.25em;
       margin-bottom: 0.15em;
     }
@@ -209,11 +209,12 @@
     .stilo-checkbox {
       appearance: none;
       -webkit-appearance: none;
-      width: 19px;
-      height: 19px;
-      margin: 3px 10px 0 0;
-      border: 2px solid var(--border-color);
-      border-radius: 5px;
+      font: inherit;
+      width: 0.9em;
+      height: 0.9em;
+      margin: 0.34em 0.47em 0 0;
+      border: 0.1em solid var(--border-color);
+      border-radius: 0.25em;
       outline: none;
       cursor: pointer;
       flex-shrink: 0;
@@ -236,11 +237,11 @@
 
     .stilo-checkbox:checked::after {
       content: "";
-      width: 5px;
-      height: 9px;
+      width: 0.24em;
+      height: 0.43em;
       border: solid #FFFFFF;
-      border-width: 0 2px 2px 0;
-      transform: rotate(45deg) translate(-0.5px, -0.5px);
+      border-width: 0 0.1em 0.1em 0;
+      transform: rotate(45deg) translate(-0.02em, -0.02em);
       display: block;
     }
 
@@ -952,6 +953,19 @@
     let isUndoRedoAction = false;
     let typingDebounceTimer = null;
     let lastPushedHtml = '';
+    const MAX_UNDO_HISTORY_BYTES = 32 * 1024 * 1024;
+
+    function trimUndoHistory() {
+      let historyBytes = 0;
+      undoStack.forEach(state => { historyBytes += state.length * 2; });
+      redoStack.forEach(state => { historyBytes += state.length * 2; });
+      while (historyBytes > MAX_UNDO_HISTORY_BYTES && undoStack.length > 2) {
+        historyBytes -= undoStack.shift().length * 2;
+      }
+      while (historyBytes > MAX_UNDO_HISTORY_BYTES && redoStack.length > 1) {
+        historyBytes -= redoStack.shift().length * 2;
+      }
+    }
 
     function initUndoStack() {
       const current = editor.innerHTML;
@@ -971,6 +985,7 @@
         undoStack.shift();
       }
       redoStack = [];
+      trimUndoHistory();
     }
 
     function restoreCursorAtEnd() {
@@ -1452,6 +1467,21 @@
           return;
         }
         userInteractedWithCurrentNote = true;
+
+        // Replacing all selected content can leave the browser's formatted empty
+        // blocks behind. Reset to one plain editable line so typing starts cleanly.
+        if (e.key === 'Backspace' && isWholeEditorSelected(window.getSelection())) {
+          e.preventDefault();
+          saveUndoState();
+          clearTimeout(typingDebounceTimer);
+          typingDebounceTimer = null;
+          clearTimeout(markdownConvertTimer);
+          editor.innerHTML = '<div><br></div>';
+          setCursorAtStart(editor.firstElementChild);
+          notifyChange();
+          return;
+        }
+
         if (acState.active) {
           if (e.key === 'ArrowDown') {
             e.preventDefault();
@@ -2379,6 +2409,15 @@
       }
     }
 
+    function isWholeEditorSelected(selection) {
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+      const selectedRange = selection.getRangeAt(0);
+      if (!editor.contains(selectedRange.startContainer) || !editor.contains(selectedRange.endContainer)) return false;
+
+      const editorText = editor.textContent || '';
+      return editorText.length > 0 && selectedRange.cloneContents().textContent === editorText;
+    }
+
     function onKeyDown(e) {
       // Undo & Redo shortcuts
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -2463,6 +2502,30 @@
               setCursorBeforeElement(badge);
               return;
             }
+          }
+        }
+      }
+
+      // Backspace at the start of a task removes the checklist marker.
+      if (e.key === 'Backspace' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+        const sel = window.getSelection();
+        const task = getClosestElement('.stilo-task');
+        const textSpan = task && task.querySelector('.task-text');
+        if (sel && sel.isCollapsed && sel.rangeCount && textSpan && textSpan.contains(sel.anchorNode)) {
+          const range = sel.getRangeAt(0);
+          const before = range.cloneRange();
+          before.selectNodeContents(textSpan);
+          before.setEnd(range.startContainer, range.startOffset);
+          if (before.toString().length === 0) {
+            e.preventDefault();
+            saveUndoState();
+            const paragraph = document.createElement('div');
+            paragraph.innerHTML = textSpan.innerHTML || '<br>';
+            if (task.style.marginLeft) paragraph.style.marginLeft = task.style.marginLeft;
+            task.parentNode.replaceChild(paragraph, task);
+            setCursorAtStart(paragraph);
+            notifyChange();
+            return;
           }
         }
       }
@@ -2970,6 +3033,14 @@
     function onEditorInput(e) {
       if (isUpdatingFromPython || isUndoRedoAction || isConvertingMarkdown) return;
 
+      // Backspacing the last character can leave empty heading/list markup behind.
+      // Normalize that empty document too, so the next insertion starts as plain text.
+      if (e.inputType === 'deleteContentBackward' && !(editor.textContent || '').length &&
+          !editor.querySelector('img, table, .stilo-task, .stilo-img-wrapper, .stilo-table-wrapper, hr, pre')) {
+        editor.innerHTML = '<div><br></div>';
+        setCursorAtStart(editor.firstElementChild);
+      }
+
       const currentBlock = getClosestBlockElement() || editor;
       if (currentBlock.querySelector && currentBlock.querySelector('.stilo-tag, .stilo-mention, .stilo-category-badge')) {
         flattenNestedBadges(currentBlock);
@@ -2984,25 +3055,25 @@
         }
       }, 150);
 
-      // Record undo state for typing bursts
-      if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak' || e.data === ' ' || e.data === '\n') {
+      // Snapshot once per typing pause, instead of cloning the full document on
+      // every space. Paragraph breaks remain immediate undo boundaries.
+      clearTimeout(typingDebounceTimer);
+      if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak' || e.data === '\n') {
         saveUndoState();
       } else {
-        clearTimeout(typingDebounceTimer);
         typingDebounceTimer = setTimeout(() => {
+          typingDebounceTimer = null;
           saveUndoState();
-        }, 400);
+        }, 650);
       }
 
       notifyChangeDebounced();
     }
 
     function onEditorClick(e) {
-      const sel = window.getSelection();
-      if (sel && !sel.isCollapsed) return;
-
-      // Checkbox click
-      if (e.target.classList.contains('stilo-checkbox')) {
+      // Handle checkbox state before the selection guard. A prior text selection
+      // must not prevent the completed style from following the checkbox.
+      if (e.target && e.target.classList && e.target.classList.contains('stilo-checkbox')) {
         if (typeof isReadOnlyMode !== 'undefined' && isReadOnlyMode) {
           e.preventDefault();
           return;
@@ -3012,13 +3083,18 @@
         if (task) {
           if (e.target.checked) {
             task.classList.add('completed');
+            e.target.setAttribute('checked', '');
           } else {
             task.classList.remove('completed');
+            e.target.removeAttribute('checked');
           }
           notifyChange();
         }
         return;
       }
+
+      const sel = window.getSelection();
+      if (sel && !sel.isCollapsed) return;
 
       // Wiki link click: [[Note Title]] or [[Note Title/Heading]]
       const wikiLink = e.target.closest('.stilo-wiki-link');

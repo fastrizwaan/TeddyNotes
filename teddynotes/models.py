@@ -25,6 +25,7 @@ class Note:
     is_locked: bool = False
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    preview_content: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -76,6 +77,7 @@ class Note:
             is_locked=bool(row["is_locked"]) if "is_locked" in keys else False,
             created_at=float(row["created_at"] or time.time()),
             updated_at=float(row["updated_at"] or time.time()),
+            preview_content=row["preview_content"] if "preview_content" in keys and row["preview_content"] else "",
         )
 
 @dataclass

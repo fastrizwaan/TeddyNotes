@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import base64
+from collections import OrderedDict
 import os
 import re
 import urllib.parse
@@ -18,6 +19,10 @@ from teddynotes.markdown_utils import strip_markdown, extract_table_data
 
 
 _TEXTURE_CACHE: dict = {}
+_IMAGE_BYTES_CACHE = OrderedDict()
+_IMAGE_BYTES_CACHE_MAX_ENTRIES = 256
+_IMAGE_BYTES_CACHE_MAX_BYTES = 8 * 1024 * 1024
+_IMAGE_BYTES_CACHE_SIZE = 0
 
 
 def _resolve_image_bytes(url: str, db=None) -> Optional[bytes]:
@@ -95,10 +100,32 @@ def get_note_image_bytes(note: Note, db=None) -> Optional[bytes]:
 
     # 2. If content was not on the note object (e.g. lightweight Note), use fast DB method
     if db and hasattr(db, "get_note_first_image"):
+        cache_key = (note.id, note.updated_at)
+        cached = _IMAGE_BYTES_CACHE.get(cache_key, ...)
+        if cached is not ...:
+            _IMAGE_BYTES_CACHE.move_to_end(cache_key)
+            return cached
+
+        image_bytes = None
         try:
-            return db.get_note_first_image(note.id)
+            image_bytes = db.get_note_first_image(note.id)
         except Exception:
             pass
+
+        # Cache repeated body lookups across list rebuilds, with a strict memory bound.
+        global _IMAGE_BYTES_CACHE_SIZE
+        if image_bytes is None or len(image_bytes) <= _IMAGE_BYTES_CACHE_MAX_BYTES:
+            _IMAGE_BYTES_CACHE[cache_key] = image_bytes
+            if image_bytes:
+                _IMAGE_BYTES_CACHE_SIZE += len(image_bytes)
+            while (
+                len(_IMAGE_BYTES_CACHE) > _IMAGE_BYTES_CACHE_MAX_ENTRIES
+                or _IMAGE_BYTES_CACHE_SIZE > _IMAGE_BYTES_CACHE_MAX_BYTES
+            ):
+                _, evicted = _IMAGE_BYTES_CACHE.popitem(last=False)
+                if evicted:
+                    _IMAGE_BYTES_CACHE_SIZE -= len(evicted)
+        return image_bytes
     elif db and hasattr(db, "get_note"):
         db_note = db.get_note(note.id)
         if db_note:
@@ -257,31 +284,66 @@ def _create_table_preview_widget(table_rows: List[List[str]]) -> Optional[Gtk.Wi
 
 
 def _get_note_preview(note: Note) -> str:
-    """Extract clean multi-line preview text from note markdown or excerpt."""
-    text = ""
-    if note.content_markdown:
-        lines = note.content_markdown.splitlines()
-        if lines and lines[0].strip().lstrip("#").strip() == (note.title or "").strip():
-            text = "\n".join(lines[1:]).strip()
-        else:
-            text = note.content_markdown.strip()
+    """Extract a short preview while retaining checklist and list markers."""
+    text = note.preview_content or note.content_markdown or note.content_html or note.excerpt or ""
     if not text:
-        text = note.excerpt or ""
-    # Strip markdown and html image tags so they don't leak into excerpt text
-    text = re.sub(r'!\[.*?\]\([^)]+\)', '', text)
-    text = re.sub(r'<div[^>]*class=["\'][^"\']*stilo-img-wrapper[^"\']*["\'][^>]*>.*?</div>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<img[^>]*>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    # Strip HTML and markdown tables so table markup does not leak into body excerpt text
-    text = re.sub(r'<table[^>]*>.*?</table>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    clean_lines = []
-    for l in text.splitlines():
-        st = l.strip()
-        if st.startswith("|") and st.endswith("|"):
-            continue
-        clean_lines.append(l)
-    text = "\n".join(clean_lines)
+        return "Type text here..."
 
-    clean = strip_markdown(text).strip()
+    # Convert stored editor HTML list blocks to simple Markdown-like lines.
+    def _html_task(match):
+        block = match.group(0)
+        checked = bool(re.search(r"<input[^>]*\bchecked(?:=[\"\'][^\"\']*[\"\'])?", block, re.IGNORECASE))
+        content = re.sub(r"<input\b[^>]*>", "", match.group(1), flags=re.IGNORECASE)
+        return f"- [{'x' if checked else ' '}] {content}\n"
+
+    text = re.sub(
+        r"<div[^>]*class=[\"\'][^\"\']*stilo-task[^\"\']*[\"\'][^>]*>(.*?)</div>",
+        _html_task, text, flags=re.DOTALL | re.IGNORECASE
+    )
+    def _html_ordered_list(match):
+        items = re.findall(r"<li\b[^>]*>(.*?)</li>", match.group(1), flags=re.DOTALL | re.IGNORECASE)
+        return "\n".join(f"{i}. {item}" for i, item in enumerate(items, 1))
+    text = re.sub(r"<ol\b[^>]*>(.*?)</ol>", _html_ordered_list, text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<li\b[^>]*>(.*?)</li>", r"- \1\n", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"</?ul\b[^>]*>", "\n", text, flags=re.IGNORECASE)
+
+    # Remove images and tables before splitting so their markup cannot leak into text.
+    text = re.sub(r'!\[.*?\]\([^)]+\)', "", text)
+    text = re.sub(r'<div[^>]*class=["\'][^"\']*stilo-img-wrapper[^"\'][^>]*>.*?</div>', "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<img[^>]*>', "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<table[^>]*>.*?</table>', "", text, flags=re.DOTALL | re.IGNORECASE)
+
+    lines = text.splitlines()
+    if lines and strip_markdown(lines[0]).strip() == (note.title or "").strip():
+        lines = lines[1:]
+
+    preview_lines = []
+    task_re = re.compile(r"^\s*[-*+]\s+\[([ xX])\]\s*(.*)$")
+    ordered_re = re.compile(r"^\s*(\d+)[.)]\s+(.*)$")
+    bullet_re = re.compile(r"^\s*[-*+]\s+(.*)$")
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or (stripped.startswith("|") and stripped.endswith("|")):
+            continue
+        task = task_re.match(stripped)
+        ordered = ordered_re.match(stripped)
+        bullet = bullet_re.match(stripped)
+        if task:
+            marker = "☑" if task.group(1).lower() == "x" else "☐"
+            content = strip_markdown(task.group(2)).strip()
+            rendered = f"{marker} {content}"
+        elif ordered:
+            content = strip_markdown(ordered.group(2)).strip()
+            rendered = f"{ordered.group(1)}. {content}"
+        elif bullet:
+            content = strip_markdown(bullet.group(1)).strip()
+            rendered = f"• {content}"
+        else:
+            rendered = strip_markdown(stripped).strip()
+        if rendered:
+            preview_lines.append(rendered)
+
+    clean = "  ·  ".join(preview_lines[:8]).strip()
     return clean if clean else "Type text here..."
 
 
@@ -391,7 +453,7 @@ class NoteGridCard(BaseNoteCard):
     __gtype_name__ = "NoteGridCard"
 
     def _build_ui(self, selection_mode: bool):
-        self.set_size_request(200, 180)
+        self.set_size_request(200, 140)
         self.set_hexpand(True)
         self.set_halign(Gtk.Align.FILL)
         self.set_overflow(Gtk.Overflow.HIDDEN)
@@ -589,7 +651,7 @@ class NoteGridCard(BaseNoteCard):
         self.body_lbl.set_wrap(True)
         self.body_lbl.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
         self.body_lbl.set_ellipsize(Pango.EllipsizeMode.END)
-        self.body_lbl.set_lines(1 if has_media else (4 if has_category else 5))
+        self.body_lbl.set_lines(1 if has_media else 2)
         self.body_lbl.set_halign(Gtk.Align.FILL)
         self.body_lbl.set_hexpand(True)
         self.body_lbl.set_valign(Gtk.Align.START)
@@ -848,6 +910,8 @@ class NotesList(Gtk.Box):
         self.scrolled = Gtk.ScrolledWindow()
         self.scrolled.set_vexpand(True)
         self.scrolled.set_hexpand(True)
+        # Avoid inertial tail-off when scrolling through long note lists.
+        self.scrolled.set_kinetic_scrolling(False)
 
         self.clamp = Adw.Clamp()
         self.clamp.set_maximum_size(1800)

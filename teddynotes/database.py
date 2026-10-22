@@ -367,7 +367,10 @@ Enjoy writing with Teddy Notes!
             # Locked note bodies are decrypted lazily in get_note().
             query = """
             SELECT id, title, excerpt, category, tags, is_pinned, is_archived, is_trashed,
-                   has_todo, has_list, has_link, is_locked, created_at, updated_at
+                   has_todo, has_list, has_link, is_locked, created_at, updated_at,
+                   CASE WHEN is_locked = 0 THEN
+                       substr(COALESCE(NULLIF(content_markdown, ''), content_html, ''), 1, 1024)
+                   ELSE '' END AS preview_content
             FROM notes WHERE 1=1
             """
             params: List[Any] = []
