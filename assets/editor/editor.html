@@ -3061,6 +3061,7 @@
       if (currentBlock.querySelector && currentBlock.querySelector('.stilo-tag, .stilo-mention, .stilo-category-badge')) {
         flattenNestedBadges(currentBlock);
         syncAndCleanTags(currentBlock);
+        mergeEscapedTagContinuation(currentBlock);
       }
 
       clearTimeout(markdownConvertTimer);
@@ -4699,127 +4700,108 @@
     function syncAndCleanTags(container) {
       const root = container || editor;
       if (!root) return;
-      const tags = root.querySelectorAll('.stilo-tag');
-      tags.forEach(tag => {
-        const text = tag.textContent;
+      root.querySelectorAll('.stilo-tag').forEach(tag => {
+        const text = tag.textContent || '';
         const trimmed = text.trim();
         if (!trimmed) {
           tag.remove();
           return;
         }
+
         if (!trimmed.startsWith('#')) {
           const sel = window.getSelection();
           let savedOffset = -1;
           if (sel && sel.rangeCount && tag.contains(sel.getRangeAt(0).startContainer)) {
-            const range = sel.getRangeAt(0);
-            const preRange = range.cloneRange();
-            preRange.selectNodeContents(tag);
-            preRange.setEnd(range.startContainer, range.startOffset);
-            savedOffset = preRange.toString().length;
+            const range = sel.getRangeAt(0).cloneRange();
+            range.selectNodeContents(tag);
+            range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
+            savedOffset = range.toString().length;
           }
-          const tn = document.createTextNode(text);
-          tag.parentNode.replaceChild(tn, tag);
+          const textNode = document.createTextNode(text);
+          tag.parentNode.replaceChild(textNode, tag);
           if (savedOffset >= 0 && sel) {
-            const newRange = document.createRange();
-            newRange.setStart(tn, Math.min(savedOffset, tn.textContent.length));
-            newRange.collapse(true);
+            const range = document.createRange();
+            range.setStart(textNode, Math.min(savedOffset, textNode.textContent.length));
+            range.collapse(true);
             sel.removeAllRanges();
-            sel.addRange(newRange);
+            sel.addRange(range);
           }
           return;
         }
-        const existingDataTag = tag.getAttribute('data-tag') || '';
-        if (tag.getAttribute('data-tag-editing-escaped') === 'true') {
-          if (/\s$/.test(text)) {
-            tag.removeAttribute('data-tag-editing-escaped');
+
+        // Escaped spaces are tag characters. Keep all text inside the badge,
+        // remove the escape slash for display, and update the stored tag name.
+        const display = text.replace(/\\ /g, ' ');
+        if (display !== text) {
+          const sel = window.getSelection();
+          let oldOffset = -1;
+          if (sel && sel.rangeCount && tag.contains(sel.getRangeAt(0).startContainer)) {
+            const range = sel.getRangeAt(0).cloneRange();
+            range.selectNodeContents(tag);
+            range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
+            oldOffset = range.toString().length;
+          }
+          tag.textContent = display;
+          if (oldOffset >= 0 && sel) {
+            const textNode = tag.firstChild || tag.appendChild(document.createTextNode(''));
+            const newOffset = text.slice(0, oldOffset).replace(/\\ /g, ' ').length;
+            const range = document.createRange();
+            range.setStart(textNode, Math.min(newOffset, textNode.textContent.length));
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
+        }
+        const clean = display.trim().replace(/^#+/, '').trim().toLowerCase();
+        if (clean) tag.setAttribute('data-tag', clean);
+        else tag.removeAttribute('data-tag');
+      });
+    }
+    // ==========================================
+    function mergeEscapedTagContinuation(container) {
+      const root = container || editor;
+      if (!root) return;
+      root.querySelectorAll('.stilo-tag').forEach(tag => {
+        const tagText = tag.textContent || '';
+        const pendingEscape = /\\$/.test(tagText);
+        const next = tag.nextSibling;
+        if (!next || next.nodeType !== Node.TEXT_NODE) return;
+        const raw = next.textContent || '';
+        const leading = (raw.match(/^\s*/) || [''])[0];
+        let payload = raw.slice(leading.length);
+        let consumed = leading.length;
+        if (!pendingEscape && payload.startsWith('\\ ')) {
+          payload = payload.slice(2);
+          consumed += 2;
+        } else if (!pendingEscape) {
+          return;
+        }
+        const match = payload.match(/^([a-zA-Z0-9_-]+(?:\\ [a-zA-Z0-9_-]+)*)(?=$|\s)/);
+        if (!match) return;
+        const continuation = match[1];
+        const selection = window.getSelection();
+        const oldOffset = selection && selection.anchorNode === next ? selection.anchorOffset : -1;
+        const base = pendingEscape ? tagText.replace(/\\$/, '') : tagText;
+        const display = base + ' ' + continuation.replace(/\\ /g, ' ');
+        consumed += continuation.length;
+        const tail = raw.slice(consumed);
+        tag.textContent = display;
+        tag.setAttribute('data-tag', display.replace(/^#+/, '').trim().toLowerCase());
+        next.textContent = tail;
+        if (oldOffset >= 0) {
+          const range = document.createRange();
+          if (oldOffset <= consumed) {
+            const textNode = tag.firstChild || tag.appendChild(document.createTextNode(''));
+            range.setStart(textNode, textNode.textContent.length);
           } else {
-            const display = trimmed.replace(/\\ /g, ' ');
-            const sel = window.getSelection();
-            let oldOffset = -1;
-            if (sel && sel.rangeCount && tag.contains(sel.getRangeAt(0).startContainer)) {
-              const range = sel.getRangeAt(0).cloneRange();
-              range.selectNodeContents(tag);
-              range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
-              oldOffset = range.toString().length;
-            }
-            if (display !== text) {
-              tag.textContent = display;
-              if (oldOffset >= 0 && sel) {
-                const textNode = tag.firstChild || tag.appendChild(document.createTextNode(''));
-                const newOffset = text.slice(0, oldOffset).replace(/\\ /g, ' ').length;
-                const range = document.createRange();
-                range.setStart(textNode, Math.min(newOffset, textNode.textContent.length));
-                range.collapse(true);
-                sel.removeAllRanges();
-                sel.addRange(range);
-              }
-            }
-            tag.setAttribute('data-tag', display.replace(/^#+/, '').trim().toLowerCase());
-            return;
+            range.setStart(next, Math.min(oldOffset - consumed, tail.length));
           }
-        }
-        const existingPrefix = '#' + existingDataTag.trim();
-        if (existingDataTag && trimmed === existingPrefix) {
-          const clean = existingDataTag.replace(/^#+/, '').trim().toLowerCase();
-          if (clean) tag.setAttribute('data-tag', clean);
-          return;
-        }
-        // Keep typing escaped words inside a multiword tag badge. The user may
-        // finish the next escaped word one keystroke at a time.
-        if (existingDataTag && trimmed.startsWith(existingPrefix)) {
-          const suffix = trimmed.slice(existingPrefix.length);
-          if (suffix.startsWith('\\')) {
-            const complete = /^(?:\\ [a-zA-Z0-9_-]+)+$/.test(suffix);
-            const pending = /^(?:\\ [a-zA-Z0-9_-]+)*(?:\\ ?[a-zA-Z0-9_-]*)?$/.test(suffix);
-            if (complete) {
-              const sel = window.getSelection();
-              let oldOffset = -1;
-              if (sel && sel.rangeCount && tag.contains(sel.getRangeAt(0).startContainer)) {
-                const range = sel.getRangeAt(0).cloneRange();
-                range.selectNodeContents(tag);
-                range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
-                oldOffset = range.toString().length;
-              }
-              const display = trimmed.replace(/\\ /g, ' ');
-              tag.textContent = display;
-              tag.setAttribute('data-tag', display.replace(/^#+/, '').trim().toLowerCase());
-              tag.setAttribute('data-tag-editing-escaped', 'true');
-              if (oldOffset >= 0 && sel) {
-                const textNode = tag.firstChild || tag.appendChild(document.createTextNode(''));
-                const newOffset = trimmed.slice(0, oldOffset).replace(/\\ /g, ' ').length;
-                const range = document.createRange();
-                range.setStart(textNode, Math.min(newOffset, textNode.textContent.length));
-                range.collapse(true);
-                sel.removeAllRanges();
-                sel.addRange(range);
-              }
-              return;
-            }
-            if (pending) return;
-          }
-        }
-        if (/\s/.test(trimmed)) {
-          const parts = trimmed.split(/\s+/);
-          const firstTag = parts[0];
-          const restIndex = text.indexOf(firstTag) + firstTag.length;
-          const restText = text.substring(restIndex);
-          tag.textContent = firstTag;
-          const clean = firstTag.replace(/^#+/, '').trim().toLowerCase();
-          tag.setAttribute('data-tag', clean);
-          if (restText) {
-            const tn = document.createTextNode(restText);
-            tag.parentNode.insertBefore(tn, tag.nextSibling);
-          }
-          return;
-        }
-        const clean = trimmed.replace(/^#+/, '').trim().toLowerCase();
-        if (clean && tag.getAttribute('data-tag') !== clean) {
-          tag.setAttribute('data-tag', clean);
+          range.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(range);
         }
       });
     }
-
-    // ==========================================
     // Python WebKit Bridge & Data Extraction
     // ==========================================
 
@@ -4911,7 +4893,6 @@
         return editor.innerHTML.replace(/\u200B/g, '');
       }
       const clone = editor.cloneNode(true);
-      clone.querySelectorAll('.stilo-tag').forEach(tag => tag.removeAttribute('data-tag-editing-escaped'));
       clone.querySelectorAll('.table-handle, .image-handle, .col-resize-handle').forEach(h => h.remove());
       clone.querySelectorAll('.table-active, .img-active').forEach(el => {
         el.classList.remove('table-active');
