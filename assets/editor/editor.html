@@ -144,12 +144,15 @@
       min-height: 100%;
     }
 
+    #editor, #editor * {
+      caret-color: var(--text-color);
+    }
+
     #editor {
       outline: none;
       min-height: 70vh;
       overflow-wrap: break-word;
       word-break: break-word;
-      caret-color: var(--text-color);
     }
 
     #editor > *:first-child {
@@ -421,6 +424,7 @@
 
     table.stilo-table {
       width: 100%;
+      color: var(--text-color);
       border-collapse: collapse;
       margin: 0;
       border: 1px solid var(--table-border);
@@ -1939,6 +1943,10 @@
 
     function hasMarkdownSyntax(str, allowEndOfString = false) {
       if (!str) return false;
+      const escapedSpaceTag = allowEndOfString
+        ? /(?<![#\w])#[a-zA-Z0-9_-]+(?:\\ [a-zA-Z0-9_-]+)*(?=$|[\s.,;:!?])/
+        : /(?<![#\w])#[a-zA-Z0-9_-]+(?:\\ [a-zA-Z0-9_-]+)*(?=[\s.,;:!?])/;
+      if (escapedSpaceTag.test(str)) return true;
       if (allowEndOfString) {
         return /(?:```|~~~|^#{1,6}\s|^>\s|^[-*+]\s|^\d+\.\s|^[-*+]\s*\[[ xX]\]|^\|.+\||\*\*|__|\*|_|~~|==|`|<\/?u>|<\/?ins>|\+\+|\[.+\]\(.+\)|\[\[[^\n\]]+\]\]|\^([^\^\s]+)\^|~([^~\s]+)~|:([a-z0-9_+-]+):|\[\^[^\]]+\]|&lt;https?:\/\/|https?:\/\/|(?<!#)##[a-zA-Z0-9_\-]+(?:\/[a-zA-Z0-9_\-]+)*(?=$|[\s.,;:!?])|(?<![#\w])#[a-zA-Z0-9_\-]+(?=$|[\s.,;:!?])|(?<![\w@])@[a-zA-Z0-9_\.\-]+(?=$|[\s.,;:!?])|\\[!"#$%&'()*+,-./:;<=>?@[\\\]^_`{|}~])/m.test(str);
       }
@@ -2032,8 +2040,16 @@
       // 14. Categories / Folders: ##Category/Sub (checked before #tag)
       applyRule(new RegExp('(^|[\\s.,;:!?])##([a-zA-Z0-9_\\-]+(?:\\/[a-zA-Z0-9_\\-]+)*)' + endLookahead, 'g'), '$1<span class="stilo-category-badge" data-category="$2">📁 $2</span>');
 
-      // 15. Tags: #tag (word characters and hyphens)
-      applyRule(new RegExp('(^|[\\s.,;:!?])#([a-zA-Z0-9_\\-]+)' + endLookahead, 'g'), '$1<span class="stilo-tag" data-tag="$2">#$2</span>');
+      // 15. Tags: #tag; escaped spaces keep multiword names together.
+      const tagRule = new RegExp('(^|[\\s.,;:!?])#([a-zA-Z0-9_\\-]+(?:\\\\ [a-zA-Z0-9_\\-]+)*)' + endLookahead, 'g');
+      if (tagRule.test(s)) {
+        matched = true;
+        s = s.replace(tagRule, (match, prefix, rawTag) => {
+          const tag = rawTag.replace(/\\ /g, ' ');
+          const safeTag = escapeHtml(tag);
+          return prefix + '<span class="stilo-tag" data-tag="' + safeTag + '">#' + safeTag + '</span>';
+        });
+      }
 
       // 16. Mentions: @person
       applyRule(new RegExp('(^|[\\s.,;:!?])@([a-zA-Z0-9_\\.\\-]+)' + endLookahead, 'g'), '$1<span class="stilo-mention" data-mention="$2">@$2</span>');
@@ -4361,19 +4377,29 @@
       allEls.forEach(el => {
         for (let attr of Array.from(el.attributes)) {
           const attrName = attr.name.toLowerCase();
-          if (attrName.startsWith('on')) {
-            el.removeAttribute(attr.name);
-          }
+          if (attrName.startsWith('on')) el.removeAttribute(attr.name);
         }
         ['href', 'src', 'action'].forEach(attrName => {
           const val = el.getAttribute(attrName);
-          if (val) {
-            const trimmed = val.trim().toLowerCase();
-            if (trimmed.startsWith('javascript:') || trimmed.startsWith('vbscript:')) {
-              el.removeAttribute(attrName);
-            }
-          }
+          if (!val) return;
+          const trimmed = val.trim().toLowerCase();
+          if (trimmed.startsWith('javascript:') || trimmed.startsWith('vbscript:')) el.removeAttribute(attrName);
         });
+        // Clipboard colors are usually chosen for the source app's background.
+        // Remove them so pasted content inherits the active editor theme.
+        el.removeAttribute('color');
+        el.removeAttribute('bgcolor');
+        if (el.style) {
+          ['color', 'background-color', 'background', '-webkit-text-fill-color', 'caret-color'].forEach(property => el.style.removeProperty(property));
+          if (!el.getAttribute('style')) el.removeAttribute('style');
+        }
+      });
+
+      // External tables need the editor theme and table controls after paste.
+      doc.body.querySelectorAll('table').forEach(table => {
+        table.classList.add('stilo-table');
+        table.removeAttribute('border');
+        table.querySelectorAll('td, th').forEach(cell => cell.removeAttribute('border'));
       });
 
       return doc.body.innerHTML;
@@ -4461,6 +4487,7 @@
         saveUndoState();
         const clean = sanitizeHtml(html);
         document.execCommand('insertHTML', false, clean);
+        initAllHandles();
         notifyChange();
         return;
       }
@@ -4701,6 +4728,76 @@
           }
           return;
         }
+        const existingDataTag = tag.getAttribute('data-tag') || '';
+        if (tag.getAttribute('data-tag-editing-escaped') === 'true') {
+          if (/\s$/.test(text)) {
+            tag.removeAttribute('data-tag-editing-escaped');
+          } else {
+            const display = trimmed.replace(/\\ /g, ' ');
+            const sel = window.getSelection();
+            let oldOffset = -1;
+            if (sel && sel.rangeCount && tag.contains(sel.getRangeAt(0).startContainer)) {
+              const range = sel.getRangeAt(0).cloneRange();
+              range.selectNodeContents(tag);
+              range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
+              oldOffset = range.toString().length;
+            }
+            if (display !== text) {
+              tag.textContent = display;
+              if (oldOffset >= 0 && sel) {
+                const textNode = tag.firstChild || tag.appendChild(document.createTextNode(''));
+                const newOffset = text.slice(0, oldOffset).replace(/\\ /g, ' ').length;
+                const range = document.createRange();
+                range.setStart(textNode, Math.min(newOffset, textNode.textContent.length));
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+              }
+            }
+            tag.setAttribute('data-tag', display.replace(/^#+/, '').trim().toLowerCase());
+            return;
+          }
+        }
+        const existingPrefix = '#' + existingDataTag.trim();
+        if (existingDataTag && trimmed === existingPrefix) {
+          const clean = existingDataTag.replace(/^#+/, '').trim().toLowerCase();
+          if (clean) tag.setAttribute('data-tag', clean);
+          return;
+        }
+        // Keep typing escaped words inside a multiword tag badge. The user may
+        // finish the next escaped word one keystroke at a time.
+        if (existingDataTag && trimmed.startsWith(existingPrefix)) {
+          const suffix = trimmed.slice(existingPrefix.length);
+          if (suffix.startsWith('\\')) {
+            const complete = /^(?:\\ [a-zA-Z0-9_-]+)+$/.test(suffix);
+            const pending = /^(?:\\ [a-zA-Z0-9_-]+)*(?:\\ ?[a-zA-Z0-9_-]*)?$/.test(suffix);
+            if (complete) {
+              const sel = window.getSelection();
+              let oldOffset = -1;
+              if (sel && sel.rangeCount && tag.contains(sel.getRangeAt(0).startContainer)) {
+                const range = sel.getRangeAt(0).cloneRange();
+                range.selectNodeContents(tag);
+                range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
+                oldOffset = range.toString().length;
+              }
+              const display = trimmed.replace(/\\ /g, ' ');
+              tag.textContent = display;
+              tag.setAttribute('data-tag', display.replace(/^#+/, '').trim().toLowerCase());
+              tag.setAttribute('data-tag-editing-escaped', 'true');
+              if (oldOffset >= 0 && sel) {
+                const textNode = tag.firstChild || tag.appendChild(document.createTextNode(''));
+                const newOffset = trimmed.slice(0, oldOffset).replace(/\\ /g, ' ').length;
+                const range = document.createRange();
+                range.setStart(textNode, Math.min(newOffset, textNode.textContent.length));
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+              }
+              return;
+            }
+            if (pending) return;
+          }
+        }
         if (/\s/.test(trimmed)) {
           const parts = trimmed.split(/\s+/);
           const firstTag = parts[0];
@@ -4768,13 +4865,20 @@
         const t = el.getAttribute('data-tag');
         if (t) tags.add(t.toLowerCase());
       });
-      const text = fullText !== undefined ? fullText : getEditorText();
-      const rawMatches = text.match(/(?:^|[\s.,;:!?])#([a-zA-Z0-9_\-]+)(?=$|[\s.,;:!?])/g);
-      if (rawMatches) {
-        rawMatches.forEach(m => {
-          const t = m.trim().replace(/^#/, '').toLowerCase();
+      // Read raw hashtags only from text outside existing tag badges. The old
+      // regex included preceding punctuation in its match (for example ".#tag"),
+      // which created a bogus second tag in the sidebar.
+      const walker = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT);
+      let textNode;
+      const rawTagPattern = /(?<![#\w])#([a-zA-Z0-9_-]+(?:\\ [a-zA-Z0-9_-]+)*)(?=$|[\s.,;:!?])/g;
+      while ((textNode = walker.nextNode())) {
+        const parent = textNode.parentElement;
+        if (parent && parent.closest('.stilo-tag, pre, code')) continue;
+        let match;
+        while ((match = rawTagPattern.exec(textNode.textContent)) !== null) {
+          const t = match[1].replace(/\\ /g, ' ').toLowerCase();
           if (t) tags.add(t);
-        });
+        }
       }
       return Array.from(tags);
     }
@@ -4807,6 +4911,7 @@
         return editor.innerHTML.replace(/\u200B/g, '');
       }
       const clone = editor.cloneNode(true);
+      clone.querySelectorAll('.stilo-tag').forEach(tag => tag.removeAttribute('data-tag-editing-escaped'));
       clone.querySelectorAll('.table-handle, .image-handle, .col-resize-handle').forEach(h => h.remove());
       clone.querySelectorAll('.table-active, .img-active').forEach(el => {
         el.classList.remove('table-active');

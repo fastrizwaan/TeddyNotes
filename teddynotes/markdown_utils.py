@@ -292,7 +292,7 @@ RE_HTM_BR = re.compile(r'<br[^>]*>')
 RE_HTM_MULTI_NEWLINES = re.compile(r'\n{3,}')
 
 # Symbol Mappings: #tag, @mention, [[Wiki Link]], ##Category
-RE_TAG_EXTRACT = re.compile(r'(?<![#\w])#([a-zA-Z0-9_\-]+)(?![#\w])')
+RE_TAG_EXTRACT = re.compile(r'(?<![#\w])#([a-zA-Z0-9_-]+(?:\\ [a-zA-Z0-9_-]+)*)(?![#\w])')
 RE_CAT_HASH = re.compile(r'(?<!#)##([a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_\-]+)*)')
 RE_CAT_SLASH = re.compile(r'(?:^|(?<=\s))/([a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_\-]+)*)(?=$|[\s.,;:!?])')
 RE_MENTION_EXTRACT = re.compile(r'(?<![\w@])@([a-zA-Z0-9_\.\-]+)(?![@\w])')
@@ -385,17 +385,20 @@ def extract_tags(text: str) -> List[str]:
     result = []
     # Check for HTML tag badges first: <span class="stilo-tag" data-tag="...">
     for t in RE_HTM_TAG.findall(text):
-        tag = t.strip().lstrip("#").lower()
+        tag = t.strip().lstrip("#").replace("\\ ", " ").lower()
         if tag and tag not in seen:
             seen.add(tag)
             result.append(tag)
 
+    # Exclude badge display text after recording data-tag, so a multiword badge
+    # such as "#a and b" does not also create a second "#a" tag.
+    clean = RE_HTM_TAG.sub(" ", text)
     clean = re.sub(r'```[\s\S]*?```', '', text)
     clean = re.sub(r'`[^`\n]+`', '', clean)
     clean = RE_HTML_TAGS.sub(' ', clean)
     matches = RE_TAG_EXTRACT.findall(clean)
     for m in matches:
-        tag = m.strip().lstrip("#").lower()
+        tag = m.strip().lstrip("#").replace("\\ ", " ").lower()
         if tag and tag not in seen:
             seen.add(tag)
             result.append(tag)
@@ -469,7 +472,7 @@ def strip_markdown(text: str) -> str:
         return d[2:-2] if d.startswith("[[") and d.endswith("]]") else d
     s = RE_HTM_WIKI.sub(_plain_wiki, s)
     s = RE_WIKI_LINK.sub(r'\1', s)
-    s = RE_HTM_TAG.sub(r'#\1', s)
+    s = RE_HTM_TAG.sub(lambda m: "#" + re.sub(r"\s+", lambda _space: "\\ ", m.group(1).strip()), s)
     s = RE_HTM_MENTION.sub(r'@\1', s)
     s = RE_HTM_CAT_BADGE.sub(r'\1', s)
     s = RE_CAT_HASH.sub(r'\1', s)
@@ -764,8 +767,12 @@ def markdown_to_html(md_text: str) -> str:
             
         s = RE_WIKI_LINK.sub(_wiki_link_replacer, s)
 
-        # Tags: #tag
-        s = RE_TAG_EXTRACT.sub(r'<span class="stilo-tag" data-tag="\1">#\1</span>', s)
+        # Tags: #tag, including multiword names with escaped spaces.
+        def _format_tag(match: re.Match) -> str:
+            tag = match.group(1).replace("\\ ", " ")
+            safe_tag = html.escape(tag, quote=True)
+            return f'<span class="stilo-tag" data-tag="{safe_tag}">#{safe_tag}</span>'
+        s = RE_TAG_EXTRACT.sub(_format_tag, s)
 
         # Mentions: @name
         s = RE_MENTION_EXTRACT.sub(r'<span class="stilo-mention" data-mention="\1">@\1</span>', s)
@@ -1343,7 +1350,7 @@ def html_to_markdown(html_content: str) -> str:
             return f"[[{base}]]"
         return f"[[{base}|{display}]]"
     s = RE_HTM_WIKI.sub(_html_to_md_wiki, s)
-    s = RE_HTM_TAG.sub(r'#\1', s)
+    s = RE_HTM_TAG.sub(lambda m: "#" + re.sub(r"\s+", lambda _space: "\\ ", m.group(1).strip()), s)
     s = RE_HTM_MENTION.sub(r'@\1', s)
     s = RE_HTM_CAT_BADGE.sub(r'##\1', s)
 

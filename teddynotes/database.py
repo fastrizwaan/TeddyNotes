@@ -1538,10 +1538,18 @@ Enjoy writing with Teddy Notes!
                     t_list = json.loads(raw)
                 except Exception:
                     t_list = [x.strip() for x in str(raw).split(",") if x.strip()]
+                note_tags = set()
                 for t in t_list:
-                    t_clean = t.strip().lstrip("#").lower()
+                    t_clean = t.strip().lstrip("#").lower().replace("\\ ", " ")
+                    # Older editor builds could include punctuation and a second
+                    # hashtag in one saved name (for example ".#love"). Keep the
+                    # actual hashtag name and count it only once per note.
+                    if "#" in t_clean:
+                        t_clean = t_clean.rsplit("#", 1)[-1]
                     if t_clean:
-                        tag_counts[t_clean] = tag_counts.get(t_clean, 0) + 1
+                        note_tags.add(t_clean)
+                for t_clean in note_tags:
+                    tag_counts[t_clean] = tag_counts.get(t_clean, 0) + 1
 
             # Fallback only for unmigrated notes that have hashtags but no tags column value
             cursor.execute(f"SELECT content_markdown FROM notes WHERE is_trashed = 0{cond} AND (tags IS NULL OR tags = '' OR tags = '[]') AND content_markdown LIKE '%#%'")
