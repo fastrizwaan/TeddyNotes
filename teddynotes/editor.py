@@ -369,6 +369,7 @@ class NoteEditor(Gtk.Box):
         self._mouse_over_toolbar = False
         self._mouse_near_bottom = False
         self._is_toolbar_pinned = self.config_manager.get_toolbar_pinned()
+        self._multi_column_mode = self.config_manager.get_multi_column_mode()
         self._page_loaded = False
         self._pending_load_note = None
         self._save_timeout_id = None
@@ -450,6 +451,14 @@ class NoteEditor(Gtk.Box):
         self.format_btn.set_active(self._is_toolbar_pinned)
         self.format_btn.connect("toggled", self._on_format_btn_toggled)
 
+        self.columns_btn = Gtk.ToggleButton()
+        self.columns_btn.set_icon_name("view-grid-symbolic")
+        self.columns_btn.set_tooltip_text("Switch to single-column layout" if self._multi_column_mode else "Switch to multi-column layout")
+        self.columns_btn.set_focus_on_click(False)
+        self.columns_btn.add_css_class("flat")
+        self.columns_btn.set_active(self._multi_column_mode)
+        self.columns_btn.connect("toggled", self._on_columns_btn_toggled)
+
         # 5. Star / Favorites toggle button
         self.star_btn = Gtk.Button()
         self.star_btn.set_icon_name("non-starred-symbolic")
@@ -470,6 +479,7 @@ class NoteEditor(Gtk.Box):
         self.main_header_bar.pack_end(self.info_btn)
         self.main_header_bar.pack_end(self.print_btn)
         self.main_header_bar.pack_end(self.format_btn)
+        self.main_header_bar.pack_end(self.columns_btn)
         self.main_header_bar.pack_end(self.star_btn)
         self.main_header_bar.pack_end(self.lock_btn)
 
@@ -622,6 +632,15 @@ class NoteEditor(Gtk.Box):
         if is_editing:
             GLib.idle_add(self.focus_editor)
 
+    def _on_columns_btn_toggled(self, btn):
+        enabled = btn.get_active()
+        self._multi_column_mode = enabled
+        self.config_manager.set_multi_column_mode(enabled)
+        btn.set_tooltip_text("Switch to single-column layout" if enabled else "Switch to multi-column layout")
+        if self._page_loaded:
+            script = f"if (window.setMultiColumnMode) window.setMultiColumnMode({str(enabled).lower()});"
+            self.webview.evaluate_javascript(script, -1, None, None, None, None)
+
     def _on_format_btn_toggled(self, btn):
         pinned = btn.get_active()
         self._is_toolbar_pinned = pinned
@@ -725,6 +744,8 @@ class NoteEditor(Gtk.Box):
             self._page_loaded = True
             font_size = self.config_manager.get_font_size()
             self.update_font_size(font_size)
+            script = f"if (window.setMultiColumnMode) window.setMultiColumnMode({str(self._multi_column_mode).lower()});"
+            self.webview.evaluate_javascript(script, -1, None, None, None, None)
             if self._pending_load_note:
                 if isinstance(self._pending_load_note, tuple):
                     note, is_new = self._pending_load_note

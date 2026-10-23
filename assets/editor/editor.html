@@ -7,6 +7,7 @@
   <style>
     :root {
       --base-font-size: 16pt;
+      --editor-column-min-width: 32rem;
       --heading-scale: 1.0;
       --code-font-size: 14px;
       --quote-font-size: 16pt;
@@ -138,21 +139,96 @@
     }
 
     #editor-container {
-      max-width: 760px;
-      margin: 0 auto;
-      padding: 36px 32px 140px 32px;
+      max-width: none;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 36px clamp(24px, 3vw, 64px) 140px;
       min-height: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
     }
 
     #editor, #editor * {
       caret-color: var(--text-color);
     }
 
+    #column-scrollbar-wrap {
+      position: fixed;
+      z-index: 10001;
+      left: clamp(24px, 3vw, 64px);
+      right: clamp(24px, 3vw, 64px);
+      bottom: 72px;
+      display: none;
+      height: 20px;
+    }
+
+    #column-scrollbar-wrap.visible {
+      display: block;
+    }
+
+    #column-scrollbar {
+      display: block;
+      width: 100%;
+      height: 20px;
+      margin: 0;
+      accent-color: var(--accent-color);
+      cursor: ew-resize;
+    }
+
+    html.single-column #column-scrollbar-wrap {
+      display: none !important;
+    }
+
     #editor {
       outline: none;
-      min-height: 70vh;
+      height: 100%;
+      min-height: 0;
       overflow-wrap: break-word;
       word-break: break-word;
+      column-count: 3;
+      column-width: var(--editor-column-min-width);
+      column-fill: auto;
+      column-gap: clamp(32px, 4vw, 56px);
+      column-rule: none;
+    }
+
+    html.single-column #editor-container {
+      height: auto;
+      overflow: visible;
+    }
+
+    html.single-column #editor {
+      height: auto;
+      min-height: 70vh;
+      column-count: 1;
+      column-width: auto;
+      column-fill: balance;
+      column-rule: none;
+    }
+
+    #editor h1, #editor h2, #editor h3, #editor h4 {
+      break-after: avoid-column;
+    }
+
+    #editor .stilo-task, #editor .stilo-table-wrapper, #editor .stilo-img-wrapper,
+    #editor .stilo-code-block {
+      break-inside: avoid-column;
+    }
+
+    #editor::after {
+      content: "";
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 100%;
+      break-before: column;
+      visibility: hidden;
+      pointer-events: none;
+    }
+
+    html.single-column #editor::after {
+      display: none;
     }
 
     #editor > *:first-child {
@@ -692,6 +768,10 @@
   <div id="editor-container">
     <div id="editor" contenteditable="true" spellcheck="true"></div>
   </div>
+  <div id="column-scrollbar-wrap">
+    <input id="column-scrollbar" type="range" min="0" max="0" value="0"
+           aria-label="Scroll horizontally through editor columns" title="Scroll through columns">
+  </div>
 
   <div id="stilo-autocomplete-popover" class="stilo-autocomplete-popover hidden">
     <div id="stilo-ac-header" class="stilo-ac-header">Suggestions</div>
@@ -703,6 +783,120 @@
   <script>
     window.addEventListener('error', (e) => console.error('TeddyNotes JS Error:', e.message, e.filename, e.lineno, e.error));
     var editor = document.getElementById('editor');
+    var editorContainer = document.getElementById('editor-container');
+    var columnScrollbar = document.getElementById('column-scrollbar');
+    var columnScrollbarWrap = document.getElementById('column-scrollbar-wrap');
+    var requestedMultiColumnMode = true;
+    function getMinimumColumnWidth() {
+      const rootStyle = window.getComputedStyle(document.documentElement);
+      const value = rootStyle.getPropertyValue('--editor-column-min-width').trim();
+      const match = value.match(/^([\d.]+)(rem|px)$/);
+      if (!match) return 512;
+      const amount = parseFloat(match[1]);
+      return match[2] === 'rem'
+        ? amount * (parseFloat(rootStyle.fontSize) || 16)
+        : amount;
+    }
+    function applyResponsiveColumnMode() {
+      const styles = window.getComputedStyle(editor);
+      const gap = parseFloat(styles.columnGap) || 0;
+      const availableWidth = editor.clientWidth;
+      const fittingColumns = Math.floor((availableWidth + gap) / (getMinimumColumnWidth() + gap));
+      const singleColumn = !requestedMultiColumnMode || fittingColumns < 2;
+      const wasSingleColumn = document.documentElement.classList.contains('single-column');
+      document.documentElement.classList.toggle('single-column', singleColumn);
+      if (singleColumn || wasSingleColumn !== singleColumn) editorContainer.scrollLeft = 0;
+      return singleColumn;
+    }
+    function getColumnLayout() {
+      const styles = window.getComputedStyle(editor);
+      const availableWidth = editor.clientWidth;
+      const minimumWidth = parseFloat(styles.columnWidth) || availableWidth;
+      const gap = parseFloat(styles.columnGap) || 0;
+      const maxColumns = parseInt(styles.columnCount, 10) || Infinity;
+      const fittingColumns = Math.max(1, Math.floor((availableWidth + gap) / (minimumWidth + gap)));
+      const count = Math.max(1, Math.min(maxColumns, fittingColumns));
+      const width = (availableWidth - (count - 1) * gap) / count;
+      return { count, width, gap, stride: Math.max(1, width + gap) };
+    }
+    function getTotalColumnCount() {
+      const layout = getColumnLayout();
+      const style = window.getComputedStyle(editorContainer);
+      const paddingLeft = parseFloat(style.paddingLeft) || 0;
+      const paddingRight = parseFloat(style.paddingRight) || 0;
+      const contentExtent = Math.max(0, editorContainer.scrollWidth - paddingLeft - paddingRight);
+      return Math.max(layout.count, Math.round((contentExtent + layout.gap) / layout.stride));
+    }
+    function getMaxColumnIndex() {
+      const layout = getColumnLayout();
+      const hasSpacer = !document.documentElement.classList.contains('single-column');
+      const contentColumns = Math.max(0, getTotalColumnCount() - (hasSpacer ? 1 : 0));
+      return Math.max(0, contentColumns - layout.count);
+    }
+    function getColumnStride() {
+      return getColumnLayout().stride;
+    }
+    function getMaxColumnScroll() {
+      return Math.max(0, editorContainer.scrollWidth - editorContainer.clientWidth);
+    }
+    function snapToNearestColumn() {
+      if (document.documentElement.classList.contains('single-column')) return;
+      const stride = getColumnStride();
+      const targetColumn = Math.max(0, Math.min(getMaxColumnIndex(), Math.round(editorContainer.scrollLeft / stride)));
+      editorContainer.scrollLeft = targetColumn * stride;
+    }
+    function syncColumnScrollbar() {
+      const maxScroll = getMaxColumnScroll();
+      const stride = getColumnStride();
+      const maxColumn = getMaxColumnIndex();
+      columnScrollbar.max = String(maxColumn);
+      columnScrollbar.step = '1';
+      columnScrollbar.value = String(Math.min(maxColumn, Math.round(editorContainer.scrollLeft / stride)));
+      columnScrollbarWrap.classList.toggle('visible', maxScroll > 1 && !document.documentElement.classList.contains('single-column'));
+    }
+    let wheelTargetColumn = null;
+    let wheelTargetTimeout = null;
+    let columnSnapTimeout = null;
+    columnScrollbar.addEventListener('input', () => {
+      const stride = getColumnStride();
+      const page = Number(columnScrollbar.value);
+      editorContainer.scrollLeft = Math.min(getMaxColumnIndex(), page) * stride;
+    });
+    window.addEventListener('wheel', (event) => {
+      if (document.documentElement.classList.contains('single-column') ||
+          !editorContainer.contains(event.target)) return;
+      const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      if (!delta) return;
+
+      event.preventDefault();
+      const stride = getColumnStride();
+      const currentColumn = wheelTargetColumn === null
+        ? Math.round(editorContainer.scrollLeft / stride)
+        : wheelTargetColumn;
+      const maxColumn = getMaxColumnIndex();
+      const targetColumn = Math.max(0, Math.min(maxColumn, currentColumn + Math.sign(delta)));
+      if (targetColumn !== currentColumn) {
+        wheelTargetColumn = targetColumn;
+        editorContainer.scrollTo({
+          left: targetColumn * stride,
+          behavior: 'smooth'
+        });
+      }
+      if (wheelTargetTimeout) clearTimeout(wheelTargetTimeout);
+      wheelTargetTimeout = setTimeout(() => { wheelTargetColumn = null; }, 320);
+    }, { passive: false, capture: true });
+    editorContainer.addEventListener('scroll', () => {
+      syncColumnScrollbar();
+      if (columnSnapTimeout) clearTimeout(columnSnapTimeout);
+      columnSnapTimeout = setTimeout(snapToNearestColumn, 180);
+    }, { passive: true });
+    editor.addEventListener('input', syncColumnScrollbar);
+    window.addEventListener('resize', () => requestAnimationFrame(() => {
+      const singleColumn = applyResponsiveColumnMode();
+      if (!singleColumn) snapToNearestColumn();
+      syncColumnScrollbar();
+    }));
+    requestAnimationFrame(applyResponsiveColumnMode);
     let saveTimeout = null;
     let isUpdatingFromPython = false;
     let lastSavedHtml = '';
@@ -4976,6 +5170,8 @@
       userInteractedWithCurrentNote = false;
       isUpdatingFromPython = true;
       editor.innerHTML = html || '<h1>Untitled Note</h1><div><br></div>';
+      editorContainer.scrollLeft = 0;
+      requestAnimationFrame(syncColumnScrollbar);
       flattenNestedBadges(editor);
       syncAndCleanTags(editor);
       initAllHandles();
@@ -5008,7 +5204,8 @@
     };
 
     window.setEditorTheme = function(isDark) {
-      document.documentElement.className = isDark ? 'dark-theme' : 'light-theme';
+      document.documentElement.classList.remove('dark-theme', 'light-theme');
+      document.documentElement.classList.add(isDark ? 'dark-theme' : 'light-theme');
     };
 
     window.setFontSize = function(sizePt) {
@@ -5017,6 +5214,13 @@
 
     window.setFontFamily = function(fontStack) {
       if (fontStack) document.documentElement.style.setProperty('--font-stack', fontStack);
+    };
+
+    window.setMultiColumnMode = function(enabled) {
+      requestedMultiColumnMode = !!enabled;
+      const singleColumn = applyResponsiveColumnMode();
+      if (!singleColumn && enabled) editorContainer.scrollLeft = 0;
+      requestAnimationFrame(syncColumnScrollbar);
     };
 
     window.setTypography = function(config) {
