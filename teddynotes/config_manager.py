@@ -212,6 +212,16 @@ class ConfigManager:
         if self.db:
             self.db.set_setting("multi_column_mode", "true" if enabled else "false")
 
+    def get_centered_single_column_mode(self) -> bool:
+        """Return whether the editor uses the centered single-column layout."""
+        if self.db:
+            return self.db.get_setting("centered_single_column_mode", "true") == "true"
+        return False
+
+    def set_centered_single_column_mode(self, enabled: bool):
+        if self.db:
+            self.db.set_setting("centered_single_column_mode", "true" if enabled else "false")
+
     def get_sidebar_width(self) -> int:
         """Return sidebar width in pixels (default 260, clamped 200..500)."""
         if self.db:

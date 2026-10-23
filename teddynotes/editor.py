@@ -370,6 +370,8 @@ class NoteEditor(Gtk.Box):
         self._mouse_near_bottom = False
         self._is_toolbar_pinned = self.config_manager.get_toolbar_pinned()
         self._multi_column_mode = self.config_manager.get_multi_column_mode()
+        self._centered_single_column_mode = self.config_manager.get_centered_single_column_mode()
+        self._layout_mode = "centered" if self._centered_single_column_mode else ("multi" if self._multi_column_mode else "single")
         self._page_loaded = False
         self._pending_load_note = None
         self._save_timeout_id = None
@@ -451,13 +453,14 @@ class NoteEditor(Gtk.Box):
         self.format_btn.set_active(self._is_toolbar_pinned)
         self.format_btn.connect("toggled", self._on_format_btn_toggled)
 
-        self.columns_btn = Gtk.ToggleButton()
-        self.columns_btn.set_icon_name("view-grid-symbolic")
-        self.columns_btn.set_tooltip_text("Switch to single-column layout" if self._multi_column_mode else "Switch to multi-column layout")
+        Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).add_search_path(
+            str(get_assets_path() / "icons")
+        )
+        self.columns_btn = Gtk.Button()
         self.columns_btn.set_focus_on_click(False)
         self.columns_btn.add_css_class("flat")
-        self.columns_btn.set_active(self._multi_column_mode)
-        self.columns_btn.connect("toggled", self._on_columns_btn_toggled)
+        self._update_layout_button()
+        self.columns_btn.connect("clicked", self._on_columns_btn_clicked)
 
         # 5. Star / Favorites toggle button
         self.star_btn = Gtk.Button()
@@ -632,14 +635,40 @@ class NoteEditor(Gtk.Box):
         if is_editing:
             GLib.idle_add(self.focus_editor)
 
-    def _on_columns_btn_toggled(self, btn):
-        enabled = btn.get_active()
-        self._multi_column_mode = enabled
-        self.config_manager.set_multi_column_mode(enabled)
-        btn.set_tooltip_text("Switch to single-column layout" if enabled else "Switch to multi-column layout")
+    def _on_layout_mode_activated(self, _action, parameter):
+        self._set_layout_mode(parameter.get_string())
+
+    def _set_layout_mode(self, mode):
+        if mode not in ("multi", "single", "centered"):
+            return
+        self._layout_mode = mode
+        self._multi_column_mode = mode != "single"
+        self._centered_single_column_mode = mode == "centered"
+        self.config_manager.set_multi_column_mode(self._multi_column_mode)
+        self.config_manager.set_centered_single_column_mode(self._centered_single_column_mode)
+        self._update_layout_button()
+        if hasattr(self, "_layout_mode_action"):
+            self._layout_mode_action.set_state(GLib.Variant.new_string(mode))
         if self._page_loaded:
-            script = f"if (window.setMultiColumnMode) window.setMultiColumnMode({str(enabled).lower()});"
+            script = (
+                f"if (window.setMultiColumnMode) window.setMultiColumnMode({str(self._multi_column_mode).lower()});"
+                f"if (window.setCenteredSingleColumnMode) window.setCenteredSingleColumnMode({str(self._centered_single_column_mode).lower()});"
+            )
             self.webview.evaluate_javascript(script, -1, None, None, None, None)
+
+    def _update_layout_button(self):
+        layouts = {
+            "multi": ("view-grid-symbolic", "Layout: Multi Column (click for Single Column)"),
+            "single": ("view-list-symbolic", "Layout: Single Column (click for Single Column Centered)"),
+            "centered": ("text-center-symbolic", "Layout: Single Column Centered (click for Multi Column)"),
+        }
+        icon, tooltip = layouts[self._layout_mode]
+        self.columns_btn.set_icon_name(icon)
+        self.columns_btn.set_tooltip_text(tooltip)
+
+    def _on_columns_btn_clicked(self, _button):
+        next_layout = {"multi": "single", "single": "centered", "centered": "multi"}[self._layout_mode]
+        self._set_layout_mode(next_layout)
 
     def _on_format_btn_toggled(self, btn):
         pinned = btn.get_active()
@@ -744,7 +773,10 @@ class NoteEditor(Gtk.Box):
             self._page_loaded = True
             font_size = self.config_manager.get_font_size()
             self.update_font_size(font_size)
-            script = f"if (window.setMultiColumnMode) window.setMultiColumnMode({str(self._multi_column_mode).lower()});"
+            script = (
+                f"if (window.setMultiColumnMode) window.setMultiColumnMode({str(self._multi_column_mode).lower()});"
+                f"if (window.setCenteredSingleColumnMode) window.setCenteredSingleColumnMode({str(self._centered_single_column_mode).lower()});"
+            )
             self.webview.evaluate_javascript(script, -1, None, None, None, None)
             if self._pending_load_note:
                 if isinstance(self._pending_load_note, tuple):
@@ -868,6 +900,13 @@ class NoteEditor(Gtk.Box):
         s1.append("Note Statistics",    "editor.show-stats")
         menu.append_section(None, s1)
 
+        layout_menu = Gio.Menu()
+        for label, mode in (("Multi Column", "multi"), ("Single Column", "single"), ("Single Column Centered", "centered")):
+            item = Gio.MenuItem.new(label, None)
+            item.set_action_and_target_value("editor.set-layout-mode", GLib.Variant.new_string(mode))
+            layout_menu.append_item(item)
+        menu.append_submenu("Layout", layout_menu)
+
         s2 = Gio.Menu()
         s2.append("Change Category…",   "editor.edit-category")
         s2.append("Pin to Favorites",   "editor.toggle-pin")
@@ -909,6 +948,13 @@ class NoteEditor(Gtk.Box):
         act("decrease-font-size", lambda: self.font_size_selector.decrease())
         act("reset-font-size",    lambda: self.font_size_selector.reset())
         act("toggle-sidebar",     lambda: self.emit("toggle-sidebar"))
+        initial_layout = "centered" if self._centered_single_column_mode else ("multi" if self._multi_column_mode else "single")
+        layout_action = Gio.SimpleAction.new_stateful(
+            "set-layout-mode", GLib.VariantType.new("s"), GLib.Variant.new_string(initial_layout)
+        )
+        layout_action.connect("activate", self._on_layout_mode_activated)
+        ag.add_action(layout_action)
+        self._layout_mode_action = layout_action
         act("rename-title",  lambda: self._on_title_clicked(None))
         act("edit-category", self.enter_edit_category)
         act("toggle-pin",    self._on_toggle_pin)

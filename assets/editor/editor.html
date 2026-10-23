@@ -147,6 +147,7 @@
       min-height: 100%;
       overflow-x: auto;
       overflow-y: hidden;
+      clip-path: inset(0 clamp(24px, 3vw, 64px) 0 clamp(24px, 3vw, 64px));
     }
 
     #editor, #editor * {
@@ -205,6 +206,11 @@
       column-width: auto;
       column-fill: balance;
       column-rule: none;
+    }
+
+    html.centered-single-column #editor {
+      width: min(100%, 48rem);
+      margin-inline: auto;
     }
 
     #editor h1, #editor h2, #editor h3, #editor h4 {
@@ -802,7 +808,8 @@
       const gap = parseFloat(styles.columnGap) || 0;
       const availableWidth = editor.clientWidth;
       const fittingColumns = Math.floor((availableWidth + gap) / (getMinimumColumnWidth() + gap));
-      const singleColumn = !requestedMultiColumnMode || fittingColumns < 2;
+      const centeredSingleColumn = document.documentElement.classList.contains('centered-single-column');
+      const singleColumn = centeredSingleColumn || !requestedMultiColumnMode || fittingColumns < 2;
       const wasSingleColumn = document.documentElement.classList.contains('single-column');
       document.documentElement.classList.toggle('single-column', singleColumn);
       if (singleColumn || wasSingleColumn !== singleColumn) editorContainer.scrollLeft = 0;
@@ -810,14 +817,17 @@
     }
     function getColumnLayout() {
       const styles = window.getComputedStyle(editor);
-      const availableWidth = editor.clientWidth;
+      const availableWidth = editor.getBoundingClientRect().width;
       const minimumWidth = parseFloat(styles.columnWidth) || availableWidth;
       const gap = parseFloat(styles.columnGap) || 0;
       const maxColumns = parseInt(styles.columnCount, 10) || Infinity;
       const fittingColumns = Math.max(1, Math.floor((availableWidth + gap) / (minimumWidth + gap)));
       const count = Math.max(1, Math.min(maxColumns, fittingColumns));
-      const width = (availableWidth - (count - 1) * gap) / count;
-      return { count, width, gap, stride: Math.max(1, width + gap) };
+      const deviceScale = window.devicePixelRatio || 1;
+      const rawWidth = (availableWidth - (count - 1) * gap) / count;
+      const width = Math.ceil(rawWidth * deviceScale) / deviceScale;
+      const stride = Math.ceil((width + gap) * deviceScale) / deviceScale;
+      return { count, width, gap, stride };
     }
     function getTotalColumnCount() {
       const layout = getColumnLayout();
@@ -5218,8 +5228,16 @@
 
     window.setMultiColumnMode = function(enabled) {
       requestedMultiColumnMode = !!enabled;
+      document.documentElement.classList.remove('centered-single-column');
       const singleColumn = applyResponsiveColumnMode();
       if (!singleColumn && enabled) editorContainer.scrollLeft = 0;
+      requestAnimationFrame(syncColumnScrollbar);
+    };
+
+    window.setCenteredSingleColumnMode = function(enabled) {
+      document.documentElement.classList.toggle('centered-single-column', !!enabled);
+      const singleColumn = applyResponsiveColumnMode();
+      if (singleColumn) editorContainer.scrollLeft = 0;
       requestAnimationFrame(syncColumnScrollbar);
     };
 
