@@ -107,9 +107,10 @@ jobs:
 
       - name: Patch and repack AppImage for WebKitGTK compatibility
         run: |
+          sudo chown -R $USER:$USER .
           APPIMAGE=$(ls -1 TeddyNotes-*.AppImage | head -n 1)
           chmod +x "$APPIMAGE"
-          ./"$APPIMAGE" --appimage-extract
+          APPIMAGE_EXTRACT_AND_RUN=1 ./"$APPIMAGE" --appimage-extract
           rm -f "$APPIMAGE"
 
           # 1. Compile WebKitGTK path hook into libapprun_hooks.so
@@ -186,6 +187,7 @@ jobs:
           VERSION="${{ steps.get_version.outputs.version }}"
           TARGET="TeddyNotes-${VERSION}-x86_64.AppImage"
           APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 /usr/local/bin/appimagetool squashfs-root "$TARGET"
+          sudo chown -R $USER:$USER .
           chmod +x "$TARGET"
           rm -rf squashfs-root
 
