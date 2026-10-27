@@ -9,7 +9,7 @@ AppDir:
     id: io.github.fastrizwaan.TeddyNotes
     name: TeddyNotes
     icon: io.github.fastrizwaan.TeddyNotes
-    version: 1.7
+    version: '1.7'
     exec: usr/bin/teddynotes
     exec_args: "$@"
   apt:

@@ -91,7 +91,7 @@ jobs:
             build-essential curl file fuse libfuse2t64 gettext gobject-introspection \
             libadwaita-1-dev libgirepository-2.0-dev libgtk-4-dev \
             libwebkitgtk-6.0-dev meson ninja-build python3-gi python3-cryptography \
-            squashfs-tools
+            squashfs-tools gnupg dirmngr
 
       - name: Install appimage-builder
         run: |
@@ -101,7 +101,10 @@ jobs:
           sudo chmod +x /usr/local/bin/appimage-builder
 
       - name: Build AppImage
-        run: sudo env APPIMAGE_EXTRACT_AND_RUN=1 appimage-builder --recipe AppImageBuilder.yml --skip-test
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          sed -i "s/version: '[^']*'/version: '${VERSION}'/" AppImageBuilder.yml
+          sudo env APPIMAGE_EXTRACT_AND_RUN=1 appimage-builder --recipe AppImageBuilder.yml --skip-test
 
       - name: Name artifact
         run: |
