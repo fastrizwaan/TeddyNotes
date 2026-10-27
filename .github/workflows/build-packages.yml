@@ -108,14 +108,101 @@ jobs:
           sed -i "s/version: '[^']*'/version: '${VERSION}'/" AppImageBuilder.yml
           sudo env APPIMAGE_EXTRACT_AND_RUN=1 appimage-builder --recipe AppImageBuilder.yml --skip-test
 
-      - name: Name artifact
+      - name: Patch and repack AppImage for WebKitGTK compatibility
         run: |
+          APPIMAGE=$(ls -1 TeddyNotes-*.AppImage | head -n 1)
+          ./"$APPIMAGE" --appimage-extract
+          rm -f "$APPIMAGE"
+
+          # 1. Compile WebKitGTK path hook into libapprun_hooks.so
+          mv squashfs-root/lib/x86_64/libapprun_hooks.so squashfs-root/lib/x86_64/libapprun_hooks_orig.so
+          cat << 'EOF' > /tmp/apprun_hooks_wrapper.c
+          #define _GNU_SOURCE
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <dlfcn.h>
+
+          __attribute__((constructor))
+          static void init(void) {
+              dlopen("libapprun_hooks_orig.so", RTLD_GLOBAL | RTLD_NOW);
+          }
+
+          void* g_subprocess_launcher_spawnv(void* self, char** argv, void** error) {
+              static void* (*real_spawnv)(void*, char**, void**) = NULL;
+              if (!real_spawnv) {
+                  real_spawnv = dlsym(RTLD_NEXT, "g_subprocess_launcher_spawnv");
+              }
+              const char* appdir = getenv("APPDIR");
+              if (appdir && argv) {
+                  const char* prefix = "/usr/lib/x86_64-linux-gnu/webkitgtk-6.0";
+                  size_t prefix_len = strlen(prefix);
+                  for (int i = 0; argv[i] != NULL; i++) {
+                      if (strncmp(argv[i], prefix, prefix_len) == 0) {
+                          char* new_path = malloc(1024);
+                          snprintf(new_path, 1024, "%s%s", appdir, argv[i]);
+                          argv[i] = new_path;
+                      }
+                  }
+              }
+              return real_spawnv(self, argv, error);
+          }
+
+          void* dlopen(const char* filename, int flags) {
+              static void* (*real_dlopen)(const char*, int) = NULL;
+              if (!real_dlopen) {
+                  real_dlopen = dlsym(RTLD_NEXT, "dlopen");
+              }
+              const char* appdir = getenv("APPDIR");
+              if (appdir && filename) {
+                  const char* prefix = "/usr/lib/x86_64-linux-gnu/webkitgtk-6.0";
+                  size_t prefix_len = strlen(prefix);
+                  if (strncmp(filename, prefix, prefix_len) == 0) {
+                      char new_path[1024];
+                      snprintf(new_path, sizeof(new_path), "%s%s", appdir, filename);
+                      return real_dlopen(new_path, flags);
+                  }
+              }
+              return real_dlopen(filename, flags);
+          }
+          EOF
+          gcc -shared -fPIC -O2 /tmp/apprun_hooks_wrapper.c -o squashfs-root/lib/x86_64/libapprun_hooks.so -ldl
+
+          # 2. Restore absolute PT_INTERP (/lib64/ld-linux-x86-64.so.2) on all binaries
+          python3 -c "
+          import os
+          for root, dirs, files in os.walk('squashfs-root'):
+              for file in files:
+                  filepath = os.path.join(root, file)
+                  if os.path.isfile(filepath) and not os.path.islink(filepath):
+                      try:
+                          with open(filepath, 'rb') as f:
+                              data = f.read()
+                          old_val = b'lib64/ld-linux-x86-64.so.2\x00'
+                          new_val = b'/lib64/ld-linux-x86-64.so.2\x00'
+                          if old_val in data:
+                              data = data.replace(old_val, new_val)
+                              with open(filepath, 'wb') as f:
+                                  f.write(data)
+                      except Exception:
+                          pass
+          "
+
+          # 3. Add WebKit runtime variables to AppRun.env
+          cat << 'EOF' >> squashfs-root/AppRun.env
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+          WEBKIT_DISABLE_DMABUF_RENDERER=1
+          WEBKIT_FORCE_SANDBOX=0
+          EOF
+
+          # 4. Download appimagetool and repack AppImage
+          sudo curl -sL -o /usr/local/bin/appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/appimagetool
           VERSION="${{ steps.get_version.outputs.version }}"
           TARGET="TeddyNotes-${VERSION}-x86_64.AppImage"
-          SRC=$(ls -1 *.AppImage 2>/dev/null | head -n 1)
-          if [ -n "$SRC" ] && [ "$SRC" != "$TARGET" ]; then
-            mv "$SRC" "$TARGET"
-          fi
+          ARCH=x86_64 /usr/local/bin/appimagetool squashfs-root "$TARGET"
+          chmod +x "$TARGET"
+          rm -rf squashfs-root
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
