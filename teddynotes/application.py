@@ -57,10 +57,14 @@ class TeddyApplication(Adw.Application):
 
             appdir = os.environ.get("APPDIR")
             if appdir:
-                for theme_name in ["Adwaita", "AdwaitaLegacy", "hicolor"]:
-                    adw_dir = Path(appdir) / "usr" / "share" / "icons" / theme_name
-                    if adw_dir.exists():
-                        icon_theme.add_search_path(str(adw_dir))
+                icons_root = Path(appdir) / "usr" / "share" / "icons"
+                if icons_root.exists():
+                    icon_theme.add_search_path(str(icons_root))
+                for theme_name in ["hicolor", "Adwaita", "AdwaitaLegacy"]:
+                    for sub in ["", "symbolic/apps", "symbolic/actions", "symbolic/status", "symbolic/ui", "scalable/apps"]:
+                        d = icons_root / theme_name / sub if sub else icons_root / theme_name
+                        if d.exists():
+                            icon_theme.add_search_path(str(d))
 
     def do_activate(self):
         if not self.db:

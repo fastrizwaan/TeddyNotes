@@ -181,7 +181,33 @@ jobs:
           WEBKIT_FORCE_SANDBOX=0
           EOF
 
-          # 4. Download appimagetool and repack AppImage
+          # 4. Register SVG loader in gdk-pixbuf loaders.cache
+          LOADERS_CACHE=$(find squashfs-root -name loaders.cache | head -n 1)
+          if [ -n "$LOADERS_CACHE" ] && [ -f "$LOADERS_CACHE" ]; then
+            if ! grep -q "libpixbufloader-svg.so" "$LOADERS_CACHE"; then
+              echo "Registering libpixbufloader-svg.so in $LOADERS_CACHE"
+              cat << 'EOF' >> "$LOADERS_CACHE"
+
+"libpixbufloader-svg.so"
+"svg" 6 "gdk-pixbuf" "Scalable Vector Graphics" "LGPL"
+"image/svg+xml" "image/svg" "image/svg-xml" "image/vnd.adobe.svg+xml" "text/xml-svg" "image/svg+xml-compressed" ""
+"svg" "svgz" "svg.gz" ""
+" <svg" "*    " 100
+" <!DOCTYPE svg" "*             " 100
+
+EOF
+            fi
+          fi
+
+          # 5. Update icon caches in squashfs-root
+          if [ -d "squashfs-root/usr/share/icons/hicolor" ]; then
+            gtk4-update-icon-cache -q -t -f squashfs-root/usr/share/icons/hicolor || true
+          fi
+          if [ -d "squashfs-root/usr/share/icons/Adwaita" ]; then
+            gtk4-update-icon-cache -q -t -f squashfs-root/usr/share/icons/Adwaita || true
+          fi
+
+          # 6. Download appimagetool and repack AppImage
           sudo curl -sL -o /usr/local/bin/appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
           sudo chmod +x /usr/local/bin/appimagetool
           VERSION="${{ steps.get_version.outputs.version }}"
