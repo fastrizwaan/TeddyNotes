@@ -124,7 +124,7 @@ class FormattingBar(Gtk.Box):
         # Flowbox for toolbar buttons so that narrowing the window wraps nicely
         flowbox = Gtk.FlowBox()
         flowbox.set_valign(Gtk.Align.CENTER)
-        flowbox.set_halign(Gtk.Align.CENTER)
+        flowbox.set_halign(Gtk.Align.FILL)
         flowbox.set_selection_mode(Gtk.SelectionMode.NONE)
         flowbox.set_activate_on_single_click(False)
         flowbox.set_can_focus(False)

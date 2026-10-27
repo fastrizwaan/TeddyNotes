@@ -184,9 +184,10 @@ jobs:
           # 4. Register SVG loader in gdk-pixbuf loaders.cache
           LOADERS_CACHE=$(find squashfs-root -name loaders.cache | head -n 1)
           if [ -n "$LOADERS_CACHE" ] && [ -f "$LOADERS_CACHE" ]; then
+            sed -i 's/^# LoaderDir =/# # LoaderDir =/' "$LOADERS_CACHE"
             if ! grep -q "libpixbufloader-svg.so" "$LOADERS_CACHE"; then
               echo "Registering libpixbufloader-svg.so in $LOADERS_CACHE"
-              printf '\n"libpixbufloader-svg.so"\n"svg" 6 "gdk-pixbuf" "Scalable Vector Graphics" "LGPL"\n"image/svg+xml" "image/svg" "image/svg-xml" "image/vnd.adobe.svg+xml" "text/xml-svg" "image/svg+xml-compressed" ""\n"svg" "svgz" "svg.gz" ""\n" <svg" "*    " 100\n" <!DOCTYPE svg" "*             " 100\n\n' >> "$LOADERS_CACHE"
+              printf '\n"libpixbufloader-svg.so"\n"svg" 6 "gdk-pixbuf" "Scalable Vector Graphics" "LGPL"\n"image/svg+xml" "image/svg" "image/svg-xml" "image/vnd.adobe.svg+xml" "text/xml-svg" "image/svg+xml-compressed" ""\n"svg" "svgz" "svg.gz" ""\n"<?xml" "" 100\n"<svg" "" 100\n" <svg" "*    " 100\n" <!DOCTYPE svg" "*             " 100\n\n' >> "$LOADERS_CACHE"
             fi
           fi
 
