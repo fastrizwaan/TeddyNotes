@@ -91,7 +91,7 @@ jobs:
             build-essential curl file fuse libfuse2t64 gettext gobject-introspection \
             libadwaita-1-dev libgirepository-2.0-dev libgtk-4-dev \
             libwebkitgtk-6.0-dev meson ninja-build python3-gi python3-cryptography \
-            squashfs-tools gnupg dirmngr
+            squashfs-tools gnupg dirmngr desktop-file-utils patchelf
 
       - name: Install appimage-builder
         run: |
