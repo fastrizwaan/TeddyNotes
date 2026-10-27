@@ -90,10 +90,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            build-essential curl file libfuse2t64 gettext gobject-introspection \
-            libadwaita-1-dev libgirepository-2.0-dev libgtk-4-dev \
-            libwebkitgtk-6.0-dev meson ninja-build python3-gi python3-cryptography \
-            squashfs-tools gnupg dirmngr desktop-file-utils patchelf
+            desktop-file-utils libfuse2t64 patchelf
 
       - name: Install appimage-builder
         run: |
@@ -168,25 +165,12 @@ jobs:
           EOF
           gcc -shared -fPIC -O2 /tmp/apprun_hooks_wrapper.c -o squashfs-root/lib/x86_64/libapprun_hooks.so -ldl
 
-          # 2. Restore absolute PT_INTERP (/lib64/ld-linux-x86-64.so.2) on all binaries
-          python3 -c "
-          import os
-          for root, dirs, files in os.walk('squashfs-root'):
-              for file in files:
-                  filepath = os.path.join(root, file)
-                  if os.path.isfile(filepath) and not os.path.islink(filepath):
-                      try:
-                          with open(filepath, 'rb') as f:
-                              data = f.read()
-                          old_val = b'lib64/ld-linux-x86-64.so.2\x00'
-                          new_val = b'/lib64/ld-linux-x86-64.so.2\x00'
-                          if old_val in data:
-                              data = data.replace(old_val, new_val)
-                              with open(filepath, 'wb') as f:
-                                  f.write(data)
-                      except Exception:
-                          pass
-          "
+          # 2. Safely restore absolute PT_INTERP using patchelf
+          find squashfs-root -type f -executable | while read -r bin; do
+            if file "$bin" | grep -q "dynamically linked"; then
+              patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2 "$bin" 2>/dev/null || true
+            fi
+          done
 
           # 3. Add WebKit runtime variables to AppRun.env
           cat << 'EOF' >> squashfs-root/AppRun.env
