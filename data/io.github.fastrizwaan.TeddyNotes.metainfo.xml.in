@@ -30,6 +30,11 @@
   </provides>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.7" date="2026-10-27">
+      <description>
+        <p>Improved multi-column scrolling and added automated Flatpak and AppImage package builds.</p>
+      </description>
+    </release>
     <release version="1.6" date="2026-10-23">
       <description>
         <p>Editor layout improvements:</p>
