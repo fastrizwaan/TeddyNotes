@@ -90,7 +90,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            desktop-file-utils libfuse2t64 patchelf meson ninja-build
+            desktop-file-utils libfuse2t64 patchelf meson ninja-build libgtk-4-bin
 
       - name: Install appimage-builder
         run: |
@@ -186,16 +186,7 @@ jobs:
           if [ -n "$LOADERS_CACHE" ] && [ -f "$LOADERS_CACHE" ]; then
             if ! grep -q "libpixbufloader-svg.so" "$LOADERS_CACHE"; then
               echo "Registering libpixbufloader-svg.so in $LOADERS_CACHE"
-              cat << 'EOF' >> "$LOADERS_CACHE"
-
-"libpixbufloader-svg.so"
-"svg" 6 "gdk-pixbuf" "Scalable Vector Graphics" "LGPL"
-"image/svg+xml" "image/svg" "image/svg-xml" "image/vnd.adobe.svg+xml" "text/xml-svg" "image/svg+xml-compressed" ""
-"svg" "svgz" "svg.gz" ""
-" <svg" "*    " 100
-" <!DOCTYPE svg" "*             " 100
-
-EOF
+              printf '\n"libpixbufloader-svg.so"\n"svg" 6 "gdk-pixbuf" "Scalable Vector Graphics" "LGPL"\n"image/svg+xml" "image/svg" "image/svg-xml" "image/vnd.adobe.svg+xml" "text/xml-svg" "image/svg+xml-compressed" ""\n"svg" "svgz" "svg.gz" ""\n" <svg" "*    " 100\n" <!DOCTYPE svg" "*             " 100\n\n' >> "$LOADERS_CACHE"
             fi
           fi
 
