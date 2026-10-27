@@ -15,6 +15,20 @@ LOCALEDIR = "@LOCALEDIR@"
 
 def get_assets_path() -> Path:
     """Find the assets directory either from installed location or dev source."""
+    # 0. AppImage support ($APPDIR)
+    appdir = os.environ.get("APPDIR")
+    if appdir:
+        for p in [
+            Path(appdir) / "usr" / "share" / "teddynotes" / "assets",
+            Path(appdir) / "usr" / "share" / "stilonotes" / "assets",
+        ]:
+            if p.exists():
+                return p
+        if PKGDATADIR:
+            p = Path(appdir) / PKGDATADIR.lstrip("/") / "assets"
+            if p.exists():
+                return p
+
     # 1. Dev directory relative to source root
     dev_path = Path(__file__).resolve().parent.parent / "assets"
     if dev_path.exists():

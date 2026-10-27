@@ -26,8 +26,8 @@ AppDir:
       - gir1.2-webkit-6.0
       - gpg
       - librsvg2-common
-    exclude:
       - adwaita-icon-theme
+    exclude:
       - humanity-icon-theme
   runtime:
     env:

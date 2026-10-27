@@ -349,7 +349,7 @@ Enjoy writing with Teddy Notes!
         conn.execute("INSERT OR IGNORE INTO categories (id, name, icon, created_at) VALUES (?, ?, ?, ?)",
                      (str(uuid.uuid4()), "Personal", "user-home-symbolic", now))
         conn.execute("INSERT OR IGNORE INTO categories (id, name, icon, created_at) VALUES (?, ?, ?, ?)",
-                     (str(uuid.uuid4()), "Work", "work-symbolic", now))
+                     (str(uuid.uuid4()), "Work", "x-office-document-symbolic", now))
 
         conn.commit()
 

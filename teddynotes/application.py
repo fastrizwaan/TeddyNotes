@@ -55,6 +55,13 @@ class TeddyApplication(Adw.Application):
             if icons_dir.exists():
                 icon_theme.add_search_path(str(icons_dir))
 
+            appdir = os.environ.get("APPDIR")
+            if appdir:
+                for theme_name in ["Adwaita", "AdwaitaLegacy", "hicolor"]:
+                    adw_dir = Path(appdir) / "usr" / "share" / "icons" / theme_name
+                    if adw_dir.exists():
+                        icon_theme.add_search_path(str(adw_dir))
+
     def do_activate(self):
         if not self.db:
             self.db = NoteDatabase()

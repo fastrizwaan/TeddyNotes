@@ -564,7 +564,7 @@ class NoteGridCard(BaseNoteCard):
             top_box.append(pin_icon)
 
         if self.note.has_todo:
-            todo_icon = Gtk.Image.new_from_icon_name("checklist-symbolic")
+            todo_icon = Gtk.Image.new_from_icon_name("checkbox-checked-symbolic")
             todo_icon.add_css_class("dimmed")
             todo_icon.set_pixel_size(14)
             top_box.append(todo_icon)

@@ -1,8 +1,8 @@
 /* Teddy Notes - Modern GNOME Adwaita Styling */
 
 .stilo-window {
-  background-color: var(--window-bg-color);
-  color: var(--window-fg-color);
+  background-color: @window_bg_color;
+  color: @window_fg_color;
 }
 
 /* Sections & Chronological Card Lists */
@@ -26,8 +26,8 @@ label.index-category-pill {
   border-radius: 4px;
   margin: 0;
   padding: 1px 6px;
-  border: 1px solid var(--border-color);
-  color: var(--secondary-color);
+  border: 1px solid alpha(currentColor, 0.15);
+  color: alpha(currentColor, 0.7);
 }
 
 /* Notes FlowBox Container */
@@ -78,8 +78,8 @@ flowboxchild:active .note-list-card {
 
 .note-grid-card.checked,
 .note-list-card.checked {
-  background-color: alpha(var(--accent-bg-color, #3584e4), 0.14);
-  border-color: var(--accent-bg-color, #3584e4);
+  background-color: alpha(@accent_bg_color, 0.14);
+  border-color: @accent_bg_color;
 }
 
 /* Note Grid Card Specifics */
@@ -113,7 +113,7 @@ picture.note-grid-thumbnail {
 .note-grid-table-header label {
   font-weight: 700;
   font-size: 11px;
-  color: var(--window-fg-color);
+  color: @window_fg_color;
 }
 
 .note-grid-table-cell {
@@ -123,7 +123,7 @@ picture.note-grid-thumbnail {
 
 .note-grid-table-cell label {
   font-size: 10.5px;
-  color: var(--secondary-color);
+  color: alpha(currentColor, 0.7);
   opacity: 0.85;
 }
 
@@ -134,19 +134,19 @@ picture.note-grid-thumbnail {
 .note-grid-title {
   font-weight: 700;
   font-size: 14.5px;
-  color: var(--window-fg-color);
+  color: @window_fg_color;
 }
 
 .note-grid-date {
   font-size: 11.5px;
-  color: var(--secondary-color);
+  color: alpha(currentColor, 0.7);
   opacity: 0.7;
   margin-top: -2px;
 }
 
 .note-grid-body {
   font-size: 13px;
-  color: var(--secondary-color);
+  color: alpha(currentColor, 0.7);
   opacity: 0.85;
   margin-top: 4px;
 }
@@ -177,13 +177,13 @@ picture.note-grid-thumbnail {
 .boxed-list row .title {
   font-weight: 700;
   font-size: 14.5px;
-  color: var(--window-fg-color);
+  color: @window_fg_color;
 }
 
 .note-list-card .subtitle,
 .boxed-list row .subtitle {
   font-size: 12.5px;
-  color: var(--secondary-color);
+  color: alpha(currentColor, 0.7);
   opacity: 0.75;
 }
 
@@ -221,7 +221,7 @@ picture.note-grid-thumbnail {
 
 .stilo-stats-label {
   font-size: 13px;
-  color: var(--secondary-color);
+  color: alpha(currentColor, 0.7);
 }
 
 .stilo-stats-value {
@@ -231,14 +231,14 @@ picture.note-grid-thumbnail {
 
 /* Category Selector Completion Popover */
 entry.category-selector popover contents {
-  background-color: var(--view-bg-color);
+  background-color: @view_bg_color;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 /* Iotas-style bottom Formatting Toolbar */
 .formatting-bar, headerbar.formatting {
-  background-color: var(--headerbar-bg-color);
+  background-color: @headerbar_bg_color;
   box-shadow: none;
   border-radius: 0;
   min-height: 42px;
@@ -290,7 +290,7 @@ button.stilo-star-active {
 
 /* Toolbar Pin active state */
 button.stilo-pin-active {
-  color: var(--accent-color, #7B2CBF);
+  color: @accent_color;
   background-color: alpha(currentColor, 0.14);
 }
 
@@ -313,7 +313,7 @@ button.theme-selector:checked {
 }
 
 button.theme-selector:checked {
-  box-shadow: inset 0 0 0 2px var(--accent-bg-color, #3584e4);
+  box-shadow: inset 0 0 0 2px @accent_bg_color;
 }
 
 button.theme-selector.follow,
@@ -345,8 +345,8 @@ button.theme-selector:not(:checked) image.theme-check {
 }
 
 button.theme-selector image.theme-check {
-  color: var(--accent-fg-color, #ffffff);
-  background-color: var(--accent-bg-color, #3584e4);
+  color: @accent_fg_color;
+  background-color: @accent_bg_color;
   border-radius: 9999px;
   padding: 3px;
   -gtk-icon-size: 12px;
@@ -530,14 +530,14 @@ menubutton.sidebar-action-btn:hover > button {
   min-width: 5px;
   margin-left: -4px;
   background-color: transparent;
-  border-right: 1px solid var(--border-color, alpha(currentColor, 0.10));
+  border-right: 1px solid alpha(currentColor, 0.10);
   transition: border-color 150ms ease-in-out;
 }
 
 .sidebar-resizer:hover,
 .sidebar-resizer.dragging {
   background-color: transparent;
-  border-right: 1px solid var(--accent-bg-color, #3584e4);
+  border-right: 1px solid @accent_bg_color;
 }
 
 /* Locked Note Cards */
@@ -552,10 +552,10 @@ menubutton.sidebar-action-btn:hover > button {
 
 /* Category drag-and-drop reorder indicators */
 .category-drop-before {
-  border-top: 2px solid var(--accent-color, #3584e4);
+  border-top: 2px solid @accent_color;
 }
 
 .category-drop-after {
-  border-bottom: 2px solid var(--accent-color, #3584e4);
+  border-bottom: 2px solid @accent_color;
 }
 
